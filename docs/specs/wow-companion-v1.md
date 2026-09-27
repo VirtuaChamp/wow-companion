@@ -33,7 +33,7 @@ Ask an AI (Claude, Codex or Cursor, on the user's own CLI login) questions from 
 | D16 | Latest stable everything, looked up live at scaffold time, never from memory: Node = newest Active LTS (from `https://nodejs.org/dist/index.json`), every npm dependency at its current `latest` dist-tag (`npm view <pkg> version`), every GitHub Action at its newest major pinned to a full commit SHA with the version in a comment; the builder writes the resolved versions into `docs/versions.md`. Where `latest` is younger than the D18 `minimumReleaseAge`, the newest version at least 3 days old is taken instead, and `docs/versions.md` records both with the reason (user choice 2026-09-27). Exception: `@types/node` follows the runtime's major (the Active LTS), newest version in that major, forced workspace-wide by a pnpm override (user choice 2026-09-27) |
 | D17 | Dependency updates by Dependabot: `npm` (root, pnpm workspaces and catalog) and `github-actions`, weekly, PRs into `master`, `cooldown` 7 days before proposing a new version (security updates skip it; verify the key at scaffold time), minor+patch grouped per ecosystem, majors as separate PRs, conventional-commit titles (`chore(deps)`) so release-please reads them. pnpm `minimumReleaseAge` (D18) is the second net |
 | D18 | Engineering baseline: pnpm workspaces `apps/*` + `packages/*` with a pnpm catalog pinning every shared dependency once and `minimumReleaseAge` 3 days (new releases wait 3 days — supply-chain delay); protocol types of `## API / interface` live in `packages/contracts` (types + parsers, no I/O) and both apps import them; oxlint + oxfmt, knip (unused code/deps) in CI; tsconfig `strict` plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`; `AGENTS.md` is the single instruction file for AI contributors and `CLAUDE.md` contains only `@AGENTS.md`; squash merges with conventional PR titles. Not taken: review bots, PR-size/vouch labelers, multi-channel releases, custom lint plugin |
-| D14 | AI tools are read-only: game tools (state, lookups, waypoint) and web search; no shell, no file writes, for every provider |
+| D14 | AI tools are read-only: game tools (state, lookups, waypoint) and web search; no shell, no file writes, for every provider. Codex meets this with `--disable shell_tool` plus isolation (ignores the user's codex config, extra features disabled, empty workspace, read-only sandbox, only the wowc tools auto-approved) and ships enabled (user choice 2026-09-27, after the shell-off switch was verified). Cursor ships disabled (headless MCP not loaded, verified 2026-09-27) |
 | D10 | Every UI/UX element matches the WoW Forever UI: Blizzard templates, fonts, colours, atlases and sounds only; no custom art, fonts or colour palettes |
 
 ## Scope
@@ -118,7 +118,7 @@ Guarantees: `send` batches every message queued since the last delivered slot in
 type ProviderId = "claude" | "codex" | "cursor";
 type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "session_unknown" | "timeout" | "cancelled";
+type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "provider_failed" | "session_unknown" | "timeout" | "cancelled";
 type LinkError = "too_large" | "slots_exhausted";
 type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
 type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
@@ -130,7 +130,7 @@ interface Provider {
       onEvent: (e: ProviderEvent) => void): Promise<Result<{ sessionId: string; text: string }, ProviderError>>;
 }
 type CreateProvider = (config: ProviderConfig) => Provider;
-type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string } | { kind: "session"; id: string };
+type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string; failure?: string } | { kind: "session"; id: string };
 ```
 `ProviderConfig.models` is `config.json` `providers.<id>.models` (possibly empty), the fallback when the provider cannot list its own; an adapter never hardcodes a model list (PM decision 2026-09-27). `ErrorCode` is the wire union inside `{t:"error"}`; each module returns only its own slice. `cwd`, the MCP launch and the read-only tool policy are fixed at construction; only the run id varies per call.
 Paths:
@@ -148,7 +148,7 @@ gear: suggest_gear_upgrades → Db.candidates(level, zone, class) : ItemId[] →
 
 ## Tests first
 - `codec.roundtrip` — Lua encoder (under Lua 5.1.5) → rendered cell grid → TS decoder yields identical bytes for 0, 1, 500, 5000-byte payloads, multi-frame — AC 3
-- `codec.rejects` — flipped bit, wrong magic, truncated, wrong crc, out-of-order index → `bad_frame`, never a partial message — AC 4
+- `codec.rejects` — flipped bit, wrong magic, truncated, wrong crc, an index at or above `total`, the same `seq` with a different `total` → `bad_frame`, never a partial message; frames may arrive in any order and repeated captures of a frame or of a completed message are ignored (PM decision 2026-09-27, slice 06) — AC 4
 - `slots.write` — writes a valid Lua literal escaping `]]`, `\`, quotes, newlines; round-trips through Lua 5.1.5 `loadstring` — AC 5
 - `slots.exhausted` — 201st delivery → `slots_exhausted` — AC 5
 - `link.batch` — through `GameLink`: messages sent while a slot is pending land in one slot; a superseded `progress` for the same `id` is dropped — AC 5

@@ -6,7 +6,13 @@
       "project": ["scripts/**/*.ts"]
     },
     "apps/companion": {
-      "entry": ["src/main.ts", "src/adapters/**/*.ts", "src/core/**/*.ts", "src/transport/**/*.ts"],
+      "entry": [
+        "src/main.ts",
+        "src/adapters/**/*.ts",
+        "src/core/**/*.ts",
+        "src/transport/**/*.ts",
+        "test/providers/record-*.ts"
+      ],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "apps/mcp": {
