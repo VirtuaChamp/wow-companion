@@ -1,0 +1,274 @@
+# wow-companion-v1
+
+## Metadata
+
+| Field | Value |
+|---|---|
+| Status | Draft |
+| Area | whole repo (new) |
+| Parts | `addon/WoWCompanion` (Lua), `apps/companion/` + `apps/mcp/` (Node LTS, TS), `packages/contracts/` (shared protocol types), `scripts/` |
+| Client | WoW Forever `_classic_beta_`, build 1.60.1.70009, `## Interface: 16001` (confirmed in client 2026-09-26), exe `WowB.exe` |
+| Repository | https://github.com/VirtuaChamp/wow-companion (public) |
+| PR / Branch | — |
+
+## Motivation
+Ask an AI (Claude, Codex or Cursor, on the user's own CLI login) questions from inside WoW Forever — "I'm stuck on @quest", "is @item worth keeping", "how do I get better gear" — with the AI seeing character, position, quests, bags and gear, able to look up the Forever world database, and able to set a map waypoint.
+
+## Decisions (ask-then-build pass, 2026-09-26)
+| # | Decision |
+|---|---|
+| D1 | UI is a separate floating native chat window "Claude" (Blizzard chat frame, undocked, movable, resizable); whisper-style lines; `/ai <text>` typed in any chat box opens that window if hidden and the exchange happens there; `/r` answers the companion when it spoke last; long replies show a summary plus a clickable `[more]` opening a copyable box |
+| D2 | Written from scratch: no third-party code, identifiers or formats; client behaviour comes from the facts below and Blizzard's `forever` UI source |
+| D3 | World knowledge: local SQLite built from QuestieDB `data/Forever/*` (never committed; no licence), web search as fallback |
+| D4 | Map: built-in user waypoint + super-track in v1; own pin layer / routes / navigator in v2 |
+| D5 | Companion in Node (Active LTS, D16) TypeScript strict; providers `claude` (Agent SDK), `codex` (`codex app-server`), `cursor` (`cursor-agent` headless) behind one interface; all share one stdio MCP server |
+| D6 | Repo `C:\GITDev\wow-companion` |
+| D7 | Item slot/stats/quality come from the game client (`C_Item`), fetched on demand over the transport; QuestieDB only proposes candidates |
+| D8 | `@` mentions: quests in the log + items in bags/equipped, popup list plus inline ghost completion (Tab accepts); inline completion also for `/ai` sub-commands |
+| D9 | Settings (provider, model, effort, "this chat only") live in the native Blizzard Settings panel (Options > AddOns > WoW Companion), opened also by `/ai settings` and a gear button on the Claude window; lists come from the companion; effort greyed out for providers without it |
+| D11 | Several chats, each its own provider session, running in parallel; one Claude window with a native dropdown at its top: "New chat", then every chat newest first (name, provider, last activity); picking one reprints its history and resumes that session; a reply in a chat not shown prints a clickable notice; `/ai new <name>`, `/ai chat <name>` (autocompleted) do the same by typing; old conversations stay resumable |
+| D12 | Repository `VirtuaChamp/wow-companion`, public: no secrets or personal values committed; `.example` files for anything configurable |
+| D13 | Licence MIT, `Copyright (c) 2026 VirtuaChamp` |
+| D15 | Branching (trunk; user choice 2026-09-26): one long-lived branch `master`, the GitHub default. `feature/*`, `fix/*` branch from `master` and return by PR, squash merge, conventional-commit PR title. Every merge produces a test build (zips as a CI run artifact). Versions are automatic: release-please keeps one release PR open on `master` computed from the PR titles (`feat` → minor, `fix` → patch, `!`/`BREAKING CHANGE` → major); merging it bumps `package.json` + the `.toc` `## Version`, writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes the GitHub Release, which runs the release build. Nothing reaches `master` except through a PR with green CI, enforced by GitHub rulesets kept in `.github/rulesets/*.json` |
+| D16 | Latest stable everything, looked up live at scaffold time, never from memory: Node = newest Active LTS (from `https://nodejs.org/dist/index.json`), every npm dependency at its current `latest` dist-tag (`npm view <pkg> version`), every GitHub Action at its newest major pinned to a full commit SHA with the version in a comment; the builder writes the resolved versions into `docs/versions.md`. Where `latest` is younger than the D18 `minimumReleaseAge`, the newest version at least 3 days old is taken instead, and `docs/versions.md` records both with the reason (user choice 2026-09-27) |
+| D17 | Dependency updates by Dependabot: `npm` (root, pnpm workspaces and catalog) and `github-actions`, weekly, PRs into `master`, `cooldown` 7 days before proposing a new version (security updates skip it; verify the key at scaffold time), minor+patch grouped per ecosystem, majors as separate PRs, conventional-commit titles (`chore(deps)`) so release-please reads them. pnpm `minimumReleaseAge` (D18) is the second net |
+| D18 | Engineering baseline: pnpm workspaces `apps/*` + `packages/*` with a pnpm catalog pinning every shared dependency once and `minimumReleaseAge` 3 days (new releases wait 3 days — supply-chain delay); protocol types of `## API / interface` live in `packages/contracts` (types + parsers, no I/O) and both apps import them; oxlint + oxfmt, knip (unused code/deps) in CI; tsconfig `strict` plus `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`; `AGENTS.md` is the single instruction file for AI contributors and `CLAUDE.md` contains only `@AGENTS.md`; squash merges with conventional PR titles. Not taken: review bots, PR-size/vouch labelers, multi-channel releases, custom lint plugin |
+| D14 | AI tools are read-only: game tools (state, lookups, waypoint) and web search; no shell, no file writes, for every provider |
+| D10 | Every UI/UX element matches the WoW Forever UI: Blizzard templates, fonts, colours, atlases and sounds only; no custom art, fonts or colour palettes |
+
+## Scope
+**In scope**: floating AI chat window; `@` mentions + completion; settings panel (provider/model/effort); state snapshot (character, zone/subzone/coords, quest log with objectives and completion, equipped slots 1-19 with ilvl, bags, money, professions, talents) sent as deltas; pixel-out / slot-in transport with readiness signal; item-detail lookup round trip; waypoint; companion daemon with provider switch per chat and in config; MCP server with tools below; QuestieDB → SQLite build script; setup script that installs the addon and generates the slot pool.
+**Out of scope**: route/pin layer, navigator arrow, herb/ore nodes (v2); combat data of any kind; any input sent to the game; Linux/Wine; multi-user or hosted use.
+
+## Data model
+- `data/questie.sqlite` (gitignored), built by `scripts/build-db.ts` from a local QuestieDB checkout path given on the command line. Tables: `npc(id, name, sub_name, min_level, max_level, faction_id, friendly_to)`, `npc_spawn(npc_id, zone_id, ui_map_id, x, y)`, `quest(id, name, required_level, quest_level, zone_or_sort, objectives_text, next_in_chain)`, `quest_start(quest_id, kind, entity_id)`, `quest_end(quest_id, kind, entity_id)`, `object(id, name)`, `object_spawn(object_id, zone_id, ui_map_id, x, y)`, `item(id, name, item_level, required_level, class, sub_class)`, `item_source(item_id, kind{npc_drop,object_drop,quest_reward,vendor}, entity_id)`. `ui_map_id` resolved through `support/Forever/Zones/areaIdToUiMapId.lua`. Export runs the Lua tables under a Lua 5.1.5 from `.tools/lua51`, never by regex.
+- `apps/companion/state/` (gitignored): `chats.json` (chat id → provider, session id, transcript), `game.json` (last snapshot) — survives the beta's SavedVariables wipes.
+- `config.json` (gitignored; `config.example.json` committed): `wowPath`, `provider` (`claude|codex|cursor`), `providers.<id>.{enabled, model, effort, models, path}` (`models` only a fallback when the provider cannot list its own), `companionPort` (47831), `slotCount` (200), `timeoutMs` (600000).
+
+## Client behaviour facts (Forever 1.60.1)
+- Addon files are discovered at client launch only; a file created later is invisible until restart. `/reload` re-reads Lua of loaded addons; a LoadOnDemand addon's files are read when it is first loaded, once per UI session.
+- SavedVariables are written only on `/reload` or logout; the beta client sometimes wipes them.
+- `ReloadUI()` needs a hardware event (key or click), never a timer.
+- Screen capture sees only 8 pure colours reliably (each RGB channel fully on or off); intermediate levels shift with gamma. Exclusive fullscreen blocks capture; windowed and borderless work.
+- `PlaySoundFile(path)` returns whether the file will play: an empty `.wav` does not, a valid one does, and a file not yet played is read fresh from disk — usable as a one-bit readiness signal. Once played, the result is cached for the session.
+- Modern chat API lives in `ChatFrameUtil`; the old `ChatFrame_*`/`ChatEdit_*` names are deprecated aliases gated by the `loadDeprecationFallbacks` CVar.
+
+## API / interface
+No public API. Three internal contracts, written down so lanes build in parallel:
+
+**Pixel frame (game → companion).** Cells of 4×4 physical pixels at the top-left of UIParent, scaled by `768 / physicalScreenHeight`; each cell one of 8 pure colours = 3 bits. Frame bytes: `magic 0x57 0x43 | version u8 | seq u16 | total u8 | index u8 | length u16 | payload | crc16-CCITT u16` (big-endian). A message longer than one frame is split (`total`/`index`). Payload is UTF-8 JSON.
+
+**Reply slot (companion → game).** 200 LoadOnDemand addons `WoWCompanion_Rnnn` generated at setup, each with one file `r.lua` whose only statement is `WoWCompanion_Deliver(<lua table literal>)`. Readiness: `sig/nnn.wav` empty = not ready, valid = ready (`PlaySoundFile` return); presence heartbeat `alive/kkkk.wav`. Pool exhausted → the addon asks the user to `/reload` (hardware event required).
+
+**Messages** (JSON in frames; Lua tables in slots):
+```ts
+type GameToCompanion =
+  | { t: "hello"; v: 1; build: string; iface: number }
+  | { t: "state"; seq: number; delta: Partial<Snapshot> }
+  | { t: "ask"; id: string; chat: string; text: string; mentions: Mention[] }
+  | { t: "items"; req: string; items: ItemDetail[] }
+  | { t: "cmd"; chat: string; name: "new" | "open" | "rename" | "delete" | "reset" | "cancel"; arg?: string }
+  | { t: "settings"; chat?: string; provider: ProviderId; model: string; effort?: Effort };
+type CompanionToGame =
+  | { t: "chats"; active: string; list: { id: string; name: string; provider: ProviderId; lastAt: number; running: boolean; unread: number }[] }
+  | { t: "history"; chat: string; lines: { who: "you" | ProviderId; text: string; at: number }[] }
+  | { t: "options"; providers: { id: ProviderId; installed: boolean; enabled: boolean; reason?: string;
+      models: string[]; efforts: Effort[]; current: { model: string; effort?: Effort } }[]; defaultProvider: ProviderId }
+  | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
+  | { t: "reply"; id: string; chat: string; provider: ProviderId; summary: string; full: string; waypoint?: Waypoint }
+  | { t: "itemreq"; req: string; ids: number[] }
+  | { t: "ack"; seq: number }
+  | { t: "error"; id?: string; code: ErrorCode; message: string };
+type Mention = { kind: "quest"; questId: number } | { kind: "item"; itemId: number; bag?: number; slot?: number; equipSlot?: number };
+type Waypoint = { uiMapId: number; x: number; y: number; label: string };
+type Snapshot = {
+  character: { name: string; level: number; classId: number; raceId: number; faction: "Alliance" | "Horde"; xp: number; xpMax: number };
+  position: { uiMapId: number; zone: string; subzone: string; x: number; y: number };
+  money: number;
+  quests: { questId: number; title: string; level: number; complete: boolean;
+    objectives: { text: string; done: boolean; have: number; need: number }[] }[];
+  equipped: { slot: number; itemId: number; itemLevel: number }[];
+  bags: { bag: number; slot: number; itemId: number; count: number }[];
+  professions: { name: string; rank: number; max: number }[];
+  talents: { tab: string; points: number }[];
+};
+type ItemDetail = { itemId: number; name: string; quality: number; itemLevel: number; requiredLevel: number;
+  equipLoc: string; classId: number; subClassId: number; stats: Record<string, number> };
+type Upgrade = { slot: number; current?: ItemDetail; candidate: ItemDetail;
+  source: { kind: "npc_drop" | "object_drop" | "quest_reward" | "vendor"; entityId: number }; delta: Record<string, number> };
+type McpLaunch = { command: string; args: string[]; env: Record<string, string> };
+```
+`state.delta: Partial<Snapshot>` is shallow: a key present replaces that whole field; no deep merge. `character.name` is transport-only: never logged, never in `/ai report` (AC 20). `equipLoc` and `stats` are what the client's `C_Item` call returns, named in `docs/client-facts.md` (AC 6).
+
+**GameLink (companion transport port).** The companion core reaches the game only through this interface, implemented by slice 13 (game-link), typed in `packages/contracts` by slice 03:
+```ts
+interface GameLink {
+  messages(): AsyncIterable<GameToCompanion>;
+  send(msg: CompanionToGame): Result<void, LinkError>;
+  status(): { connected: boolean; build?: string; slotsLeft: number; badFrames: number };
+}
+```
+Behind it: capture loop, cell decode, CRC, multi-frame reassembly, `seq` de-duplication, `bad_frame` counting, `hello` handshake, heartbeat, slot allocation, Lua literal writing, signal-file flips, batching. Adapters: `createScreenLink(config)` (production) and `createMemoryLink()` (tests; `push(GameToCompanion)` and `sent(): CompanionToGame[]` live on the adapter only, not on the interface). Internal seam, not on the interface: a frame source (production = screen grab, tests = cell-grid file written by the Lua encoder).
+Guarantees: `send` batches every message queued since the last delivered slot into one slot (one slot = one `WoWCompanion_Deliver({msg, msg, …})` call); a `progress` superseded by a later one for the same `id` is dropped from the batch, never delivered stale. Game → companion: each frame stays on screen until a delivered slot carries `{t:"ack", seq}` or for `holdMs` (config; value written into `docs/client-facts.md` after the in-client measurement), whichever comes first; `ask`, `items` and `cmd` are re-painted until acked, `state` is not (the next delta supersedes it). `status().slotsLeft` is exposed and the addon warns at 20 left, before exhaustion forces a `/reload`.
+
+**Local API (MCP server → companion daemon)**, HTTP on `127.0.0.1:{companionPort}` only: `GET /state`, `POST /items {ids}` (→ game round trip, 10 s timeout), `POST /waypoint {Waypoint}` (attached to the reply of the ask named by the run id). Each `Provider.run` launches the MCP server with `env.WOWC_RUN = <ask id>` through `McpLaunch.env` (env support in each provider's MCP server config verified into `docs/client-facts.md`); the MCP server sends it as header `X-Wowc-Run` on every local API call. `POST /waypoint` with no running ask for that id → `409`, the tool returns `no_active_ask`. MCP tools: `get_game_state`, `find_npc(name|id)`, `find_quest(name|id)`, `find_object(name)`, `suggest_gear_upgrades(slot?)`, `set_waypoint(uiMapId,x,y,label)`.
+
+## Code shape
+```ts
+type ProviderId = "claude" | "codex" | "cursor";
+type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
+type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "session_unknown" | "timeout" | "cancelled";
+type LinkError = "too_large" | "slots_exhausted";
+type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
+type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
+type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number };
+interface Provider {
+  id: ProviderId;
+  describe(): Promise<{ installed: boolean; enabled: boolean; reason?: string; models: string[]; efforts: Effort[] }>;
+  run(input: { runId: string; prompt: string; system: string; sessionId?: string; model: string; effort?: Effort; signal: AbortSignal },
+      onEvent: (e: ProviderEvent) => void): Promise<Result<{ sessionId: string; text: string }, ProviderError>>;
+}
+type CreateProvider = (config: ProviderConfig) => Provider;
+type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string } | { kind: "session"; id: string };
+```
+`ErrorCode` is the wire union inside `{t:"error"}`; each module returns only its own slice. `cwd`, the MCP launch and the read-only tool policy are fixed at construction; only the run id varies per call.
+Paths:
+```
+ask:  AiWindow /ai → Mention.resolve(text) : Mention[] → Transport.send({t:"ask"}) : Result<seq, "busy">
+      → GameLink.messages() : GameToCompanion → Chats.enqueue(ask) : Result<void,"busy">
+      → Prompt.build(snapshot, mentions) : string → Provider.run({runId: ask.id, …}) : Result<{sessionId,text}, ProviderError>
+        → [MCP tool, X-Wowc-Run] → LocalApi → Game/Db : Result<T, ToolError>
+      → GameLink.send({t:"reply"}) : Result<void, LinkError> → WoWCompanion_Deliver → AiWindow.print / Waypoint.set
+gear: suggest_gear_upgrades → Db.candidates(level, zone, class) : ItemId[] → POST /items → {t:"itemreq"}
+      → game C_Item lookup → {t:"items"} → compare(equipped, candidates) : Upgrade[]
+```
+- Providers run with the chat's cwd = `apps/companion/workspace/` and **read-only tools**: claude `allowedTools: ["mcp__wowc__*","WebSearch","WebFetch"]`, no Bash/Edit/Write; codex `sandboxMode: "read-only"`; cursor without `--force`. Spawned through `cross-spawn`.
+- Lua: no globals except `WoWCompanion_Deliver`, `WoWCompanionDB` (SavedVariables) and slash commands; chat via `ChatFrameUtil.*` and `chatFrame:AddMessage`, never `ChatFrame_*`/`ChatEdit_*`; hooks with `hooksecurefunc`; `[more]` via the Blizzard-registered `addon` link type through `EventRegistry` `SetItemRef`.
+
+## Tests first
+- `codec.roundtrip` — Lua encoder (under Lua 5.1.5) → rendered cell grid → TS decoder yields identical bytes for 0, 1, 500, 5000-byte payloads, multi-frame — AC 3
+- `codec.rejects` — flipped bit, wrong magic, truncated, wrong crc, out-of-order index → `bad_frame`, never a partial message — AC 4
+- `slots.write` — writes a valid Lua literal escaping `]]`, `\`, quotes, newlines; round-trips through Lua 5.1.5 `loadstring` — AC 5
+- `slots.exhausted` — 201st delivery → `slots_exhausted` — AC 5
+- `link.batch` — through `GameLink`: messages sent while a slot is pending land in one slot; a superseded `progress` for the same `id` is dropped — AC 5
+- `link.ack` — through `GameLink` with a grid frame source: an `ask` frame is re-read until acked, a `state` frame is not; a duplicate `seq` is delivered once — AC 4
+- `provider.<id>.stream` — recorded stream fixture per provider → text deltas, tool events, session id; missing binary → `provider_missing`; auth error text → `provider_auth` — AC 7
+- `provider.<id>.cancel` — aborting `signal` → `cancelled`, child process gone — AC 7
+- `provider.<id>.session_unknown` — recorded "no such session" output → `session_unknown` — AC 7, 22
+- `api.waypoint_run` — two running asks; `POST /waypoint` with each run id lands in that ask's `reply`; unknown run id → `no_active_ask` — AC 9
+- `provider.<id>.describe` — installed/missing/disabled detection, model list from the provider (Agent SDK model listing, codex `app-server` model list, cursor model listing — each verified, else `config.models`), efforts per provider (cursor → `[]`) — AC 17
+- `settings.apply` — `{t:"settings"}` global vs chat-only; next run receives that model/effort; unknown model or unsupported effort → `error`, previous settings kept — AC 17
+- `chats.lifecycle` — new/open/rename/delete update `chats.json` and emit `chats`; `open` emits `history` (last 200 lines) and the next ask resumes the stored provider session id; a session the provider no longer knows starts fresh with a transcript summary in the prompt and a notice line — AC 22
+- `chats.busy` — second ask on a running chat → `busy`; other chat runs in parallel — AC 8
+- `mcp.<tool>` — each tool against `fixtures/mini.sqlite` and a stub local API — AC 9
+- `mcp.not_connected` — tools needing the game return `not_connected` when the daemon has no hello — AC 9
+- `gear.compare` — equipped vs candidate details, wrong armour class for the class excluded, slot match — AC 10
+- `mention.match` (Lua 5.1.5) — prefix and infix match on quest/item names, max 8, ghost text = top match; no match → no popup — AC 11
+- `sanitize.chat` — reply containing `|c`, `|H`, `|T`, `|K` escape sequences prints literally — AC 12
+- `builddb.smoke` — build from a 3-row fixture of each Questie table → expected rows, `ui_map_id` resolved — AC 13
+
+## UX / flow
+- Window: a native chat frame created once on first load, named "Claude", undocked as its own floating window, frame index and position kept in `WoWCompanionDB`; `/ai <text>` from any edit box shows it if hidden, echoes the question into it, and the reply lands there; lines `[Claude] whispers: <summary> [more]`, provider shown when not claude (`[Codex] whispers:`); status lines grey (`thinking…`, `using find_npc…`).
+- Chats (D11): native dropdown anchored at the top of the Claude window, label = active chat name; entries "New chat", then chats newest first with provider and relative time, running ones marked, unread count shown; right-click entry → Rename / Delete (Blizzard static-popup confirm). Picking reprints `history`. Reply for a chat not shown → `[Claude · <chat>] replied — [open]`.
+- Input: `/ai <text>` from any editbox; `/r` after the companion spoke routes to `/ai`, real whispers keep normal `/r`.
+- `@`: after `@` + 2 chars, popup above the editbox, max 8 rows (quest icon / item quality colour), Up/Down move, Tab or Enter accepts, Esc closes; inline grey ghost of the top match, Tab accepts; accepted token shows as `@[Name]`. Sub-commands of `/ai` (`new`, `chat`, `settings`, `report`, `reset`, `cancel`, `help`, `context`) get the same ghost completion.
+- Settings: `Settings.RegisterVerticalLayoutCategory("WoW Companion")` (verify the exact Settings API names on the `forever` branch into `docs/client-facts.md`); Provider dropdown (uninstalled/disabled providers shown disabled with `reason` as tooltip), Model dropdown filled from that provider's `models`, Effort dropdown from `efforts` (disabled when empty), checkbox "This chat only". Change → `{t:"settings"}`; the Claude window prints `[Claude] now using <provider> · <model> · <effort>`. Before the first `options` message the panel shows "Companion offline" and disables the dropdowns.
+- Look and feel (D10): popup = Blizzard tooltip/autocomplete backdrop and `GameFontHighlightSmall`; `[more]` box = Blizzard dialog template with a scrollable read-only editbox; gear button = Blizzard atlas icon; quality colours from `ITEM_QUALITY_COLORS`; sounds from `SOUNDKIT`. The builder lists every template/atlas used in `docs/client-facts.md` with its `forever` source path.
+- Waypoint arrives with a reply: set + super-tracked, line `[Claude] waypoint: <label> (x, y)`.
+- Disconnected: status line `companion offline` and the ask stays queued client-side until hello.
+
+## Architecture
+`addon/` (game, sandboxed) ⇄ pixels/slots ⇄ `apps/companion/` daemon (capture, transport, chats, prompt, providers, local API) ← HTTP ← `apps/mcp/` (stdio server spawned by the provider, queries `data/questie.sqlite` and the daemon). Dependency direction: `apps/companion` and `apps/mcp` → `packages/contracts`; `mcp` reaches the daemon only over the local API; the daemon never imports `mcp`; `packages/contracts` imports nothing from `apps/`. Inside each app: pure core (`src/core/`, no I/O, Result-returning) and adapters at the edge (`src/adapters/` — capture, filesystem, providers, HTTP, SQLite). `scripts/setup.ts` copies/junctions the addon into `{wowPath}\Interface\AddOns\`, generates the slot pool and signal files.
+
+## Risk and rollback
+- Screen capture fails (exclusive fullscreen, scaling) → `bad_frame` counts in the daemon log; `/ai context` still prints what would be sent. Rollback = uninstall addon folder + slot addons; nothing else on the machine changes.
+- Cursor headless may block on MCP approval or lack login reuse → adapter ships `enabled:false` with the verified reason in `docs/client-facts.md`.
+- Beta wipes SavedVariables → transcripts re-sent from `apps/companion/state/chats.json` on hello.
+
+## The point everything turns on
+The transport: game → pixels → capture and companion → slot addons → game, without `/reload` per message. Check against: (1) the codec round-trip test driven by the real Lua encoder, not a TS re-implementation; (2) `sig/*.wav` readiness semantics on this client (reported behaviour of this client, not verifiable from Blizzard's Lua source; confirm in the client); (3) the DPI scale and cell size surviving the capture of a borderless window at the user's resolution.
+
+## Must not change
+- No third-party source copied into the repo; the gate checks this against a prior-art identifier list kept outside the repo.
+- `data/`, `apps/companion/state/`, `config.json` never tracked (`.gitignore`).
+- No code sends input to the game or reads its memory: zero hits of `SendInput`, `keybd_event`, `PostMessage`, `SendKeys`, `ReadProcessMemory`, `robotjs`, `nut-js` in `apps/companion/` and `apps/mcp/`.
+- No addon call to `SendChatMessage`, `C_ChatInfo.SendAddonMessage`, `RunMacroText`, protected or `HasRestrictions` functions.
+- No deprecated chat globals: zero hits of `ChatFrame_AddMessageEventFilter`, `ChatEdit_`, `ChatFrame_ReplyTell` in `addon/`.
+- Local API binds `127.0.0.1` only.
+- Public repo (D12): no secret, token, API key, account id, character/realm name or absolute user path in any tracked file; real values only in gitignored `config.json` / `.env`, with committed `config.example.json` / `.env.example` holding placeholders; `pnpm run guard` refuses tracked files matching `WTF[\\/]Account[\\/]\d`, `C:\\Users\\`, `sk-`, `ghp_`, `CLAUDE_CODE_OAUTH_TOKEN=.`, `ANTHROPIC_API_KEY=.`.
+- No custom art or fonts: zero `.tga`, `.blp`, `.ttf`, `.otf` files under `addon/`; no hard-coded `SetTextColor`/`SetVertexColor` RGB literals in `addon/` except through Blizzard colour constants.
+
+## Must refuse
+- Corrupt/partial frame → dropped, counted, never delivered (AC 4).
+- Payload over 16 KB from game or reply over 64 KB → `error` with code `too_large`, not truncated silently (AC 4, 5).
+- Ask while the chat is running → `busy` line in the Claude window (AC 8).
+- Unknown/disabled/missing provider → `provider_disabled` / `provider_missing` line naming the fix (AC 7).
+- `@` with no match → no popup, text stays literal (AC 11).
+- Reply text with WoW escape sequences → printed literally (AC 12).
+- Waypoint on a map where `C_Map.CanSetUserWaypointOnMap` is false or coords outside 0-100 → `no_waypoint_map` line, no waypoint (AC 14).
+- MCP tool with no game connected → `not_connected` (AC 9).
+- Settings naming a model the provider does not list, an effort it does not support, or a disabled provider → `error`, previous settings kept (AC 17).
+- Item lookup with no answer in 10 s → `item_timeout`, gear answer says details are missing (AC 10).
+
+- Issue form submitted without the required fields (client build, addon version, companion version, provider, steps) → GitHub refuses it (`required: true`) (AC 19).
+
+## Proof of done
+Lua runs under real **Lua 5.1.5** (the client's dialect), never a 5.2+ VM: locally `pnpm run lua:setup` downloads LuaBinaries 5.1.5 into `.tools/lua51/` (gitignored); in CI `leafo/gh-actions-lua` with `luaVersion: "5.1.5"`. Tests load `tests/lua/bit_shim.lua`, a pure-Lua `bit` table with the client's `bit.band/bor/bxor/lshift/rshift` semantics. Cross-language tests exchange files: the Lua encoder writes a cell grid, the TS decoder reads it.
+```
+pnpm install --frozen-lockfile && ppnpm run lint && ppnpm run knip && ppnpm run typecheck && pnpm test && ppnpm run lua:test && ppnpm run lua:lint && ppnpm run guard
+```
+`typecheck` = `tsc -b`; `test` = vitest; `lua:test` = every `tests/lua/*_test.lua` under Lua 5.1.5; `lua:lint` = luacheck `--std lua51` with a WoW globals file, plus a ban on 5.2+ syntax in `addon/` (`//`, `&`, `|` and `~` as binary operators, `<<`, `>>`, `goto`, `::`); `guard` = `scripts/guard.ts`, the `## Must not change` greps. The prior-art identifier check is kept out of the repo: the gate runs it from `~/.claude/projects/D--Battle-net-World-of-Warcraft/wow-companion-prior-art.txt`, CI from the masked Actions secret `PRIOR_ART_PATTERNS`, set by the user in the GitHub repo settings. This repo has no entry in `rules/verification-gates.md`: this block is its proof-of-done, and it has no sensitive-surface manifest.
+
+## Acceptance Criteria
+1. `[file]` `pnpm run typecheck` exits 0; zero `any`, zero `@ts-ignore` in `apps/companion/`, `apps/mcp/`, `scripts/`. Fixture: none
+2. `[file]` `pnpm test` and `pnpm run lua:test` exit 0, and every test in `## Tests first` exists by name. Fixture: `.tools/lua51` via `pnpm run lua:setup`
+3. `[file]` `codec.roundtrip` passes with the Lua encoder executed under Lua 5.1.5 + `bit_shim.lua`. Fixture: as AC 2
+4. `[file]` `codec.rejects` passes; oversize game payload yields an `error` code. Fixture: none
+5. `[file]` `slots.write` and `slots.exhausted` pass; a reply over 64 KB yields `error`. Fixture: none
+6. `[file]` `docs/client-facts.md` records, each with a source (wow-ui-source `forever` path:line, an in-client `/dump`, or "unverified — confirm in client"): interface 16001 (in-client, 2026-09-26), `WowB.exe`, AddOns path, waypoint and super-track unrestricted, `ChatFrameUtil` names, the `C_Item` stat call, the Settings API names, how a separate floating chat window is created and kept undocked, every template/atlas used, the `PlaySoundFile` readiness behaviour ("unverified — confirm in client"), and the untainted mechanism for `/r` redirection and Tab-accept on the chat edit box. No `SetScript` on Blizzard edit boxes; `hooksecurefunc` runs after the original and cannot redirect, so if no untainted mechanism exists the builder stops and reports instead of replacing handlers. Fixture: wow-ui-source `forever` clone
+7. `[file]` `provider.<id>.stream` passes for claude, codex, cursor; `docs/client-facts.md` states whether cursor headless MCP works, and the adapter's `enabled` default matches. Fixture: recorded streams under `apps/companion/test/fixtures/`
+8. `[file]` `chats.busy` passes. Fixture: none
+9. `[file]` every `mcp.<tool>` test and `mcp.not_connected` pass. Fixture: `apps/mcp/test/fixtures/mini.sqlite`
+10. `[file]` `gear.compare` passes, including the item-timeout path. Fixture: none
+11. `[file]` `mention.match` passes under Lua 5.1.5. Fixture: as AC 2
+12. `[file]` `sanitize.chat` passes. Fixture: none
+13. `[file]` `builddb.smoke` passes; `.gitignore` covers `data/`, `apps/companion/state/`, `config.json`, `.env`, `.tools/`, `.claude/output/`; `.env.example` and `config.example.json` exist with placeholders only. Fixture: none
+14. `[file]` `waypoint.guard` (Lua) passes: `CanSetUserWaypointOnMap` false or coords outside 0-100 → no `SetUserWaypoint` call. Fixture: stubbed `C_Map`/`C_SuperTrack`
+15. `[file]` `pnpm run guard` and `pnpm run lua:lint` exit 0. Fixture: none
+16. `[file]` Pre-push twins of the in-game checks, Lua tests on stubbed Blizzard globals (`tests/lua/wow_stubs.lua`): `aiwindow.create` (one floating chat window "Claude", undocked, position persisted, not recreated on reload), `ai.route` (`/ai <text>` typed in any chat box shows the AI window if hidden, echoes the question there, reply lands there), `reply.route` (`/r` goes to the companion only when it spoke last), `more.link` (summary line carries an `addon` link; clicking opens the full text), `context.snapshot` (equipped slots 1-19 and bag items present), `settings.panel` (category registered; dropdowns disabled before `options`, filled after). Fixture: `tests/lua/wow_stubs.lua`
+17. `[file]` `provider.<id>.describe` and `settings.apply` pass. Fixture: none
+18. `[file]` `.github/workflows/ci.yml` runs the proof-of-done on push and pull_request (ubuntu, Node Active LTS, Lua 5.1.5 — pinned to the client dialect, the one exception to D16) plus `gitleaks` over the full history, plus the prior-art check reading the masked Actions secret `PRIOR_ART_PATTERNS` without echoing it (fails closed when unset, so fork PRs wait for a maintainer run); on push to `master` CI also uploads both zips as a run artifact named `test-build-<short sha>` (the test build of D15); `.github/workflows/release.yml` on `release: published` builds `WoWCompanion-<version>.zip` (addon folder only, no slot pool) and `wow-companion-<version>.zip` (companion + mcp + scripts, no `data/`) and attaches both to a GitHub Release; `actionlint` exits 0 on both. Fixture: none
+19. `[file]` `.github/ISSUE_TEMPLATE/bug_report.yml` and `feature_request.yml` are issue forms; the bug form requires client build, addon version, companion version, provider/model/effort, steps, expected/actual, and has a textarea for `/ai report` output; `config.yml` sets `blank_issues_enabled: false`; `CONTRIBUTING.md` and `SECURITY.md` say where to report what. Fixture: none
+20. `[file]` `/ai report` (Lua test `report.box`) opens a copyable box holding the repo's new-issue URL plus client build, addon version, companion version and provider/model/effort, with no character name, realm or account path. Fixture: as AC 16
+21. `[post-deploy]` In the client, the user runs the list in `HANDOFF-INTENT.md`: the "Claude" window appears as its own movable chat window; `/ai hello` from the General box opens it and the answer lands there; `/r` routing both ways; `[more]`; `@Lo` popup + Tab; `/ai context` shows gear and bags; "where is <NPC>" sets a super-tracked waypoint on map and minimap; Options > AddOns > WoW Companion, `/ai settings` and the gear button open settings; switching to Codex labels the next reply `[Codex]`; every new frame beside a stock Blizzard frame looks native. Pre-push twins: AC 3, 11, 14, 16, 17, 20. Fixture: user logged into Forever, companion running
+22. `[file]` `chats.lifecycle` passes; Lua test `chats.dropdown` (on `options`/`chats`: entries built, pick sends `open`, `history` reprinted, off-screen reply prints the notice). Fixture: as AC 16
+23. `[file]` `.github/rulesets/master.json` and `release-tags.json` are GitHub ruleset exports: `master` requires a pull request (0 required approvals, since a solo maintainer cannot approve their own PR; conversation resolution required), requires status check `ci` in strict mode (branch up to date), blocks force push and deletion, allows squash merges only, requires linear history; `release-tags.json` restricts creating, updating and deleting `v*` tags to the release-please workflow (GitHub Actions bypass actor) and the repository admin. `docs/branching.md` describes D15 plus the one-time `gh api` commands the user runs to apply the rulesets; `.github/pull_request_template.md` (what, why, how tested; checklist: CI green, no secrets, spec criteria touched) and `.github/CODEOWNERS` (`* @VirtuaChamp`) exist; the release build runs on `release: published` and refuses a tag whose commit is not on `master`. Fixture: none
+24. `[file]` Automation files: `.github/workflows/release-please.yml` (on push to `master`, `googleapis/release-please-action`, config `release-please-config.json` with `release-type: node`, `extra-files` bumping `addon/WoWCompanion/WoWCompanion.toc` `## Version`, manifest `.release-please-manifest.json` starting at `0.1.0`); `.github/workflows/pr-title.yml` fails a PR whose title is not a conventional commit; `.github/dependabot.yml` per D17 (`npm` at `/`, `github-actions` at `/`, weekly, `target-branch: master`, `cooldown.default-days: 7`, groups for minor+patch, `commit-message.prefix: chore(deps)`); `docs/versions.md` lists every resolved version with the date and the lookup used; `package.json` `engines.node` matches the resolved Active LTS; every `uses:` is pinned to a 40-character SHA with a `# vX.Y.Z` comment (checked by `pnpm run guard`). Fixture: none
+25. `[file]` D18 baseline: `pnpm-workspace.yaml` has the catalog and `minimumReleaseAge`, and every workspace dependency on a shared package uses `catalog:`; `tsconfig.base.json` sets the five strict flags of D18; `pnpm run lint` (oxlint), `pnpm run format:check` (oxfmt) and `pnpm run knip` exit 0; `packages/contracts` has no import from `apps/` and no Node I/O module (`fs`, `net`, `child_process`, `http`); `CLAUDE.md` is exactly `@AGENTS.md`; `AGENTS.md` states the D1-D18 rules builders must keep (read-only AI tools, native UI only, no secrets, Lua 5.1 dialect, conventional PR titles, branch flow). Fixture: none
+
+## Lane cards
+Carved by step-02b into 14 slices; cards and mini-specs are one list. Worktree `../worktree/wow-companion/<lane key>`, branch `feature/<lane key>`, lane key `wow-companion-v1-NN-<slice>`. No ports (no web app). Waves and shared files: [SHARED-FILES.md](wow-companion-v1/SHARED-FILES.md).
+
+| NN | Slice | Wave | Depends on | Done when |
+|---|---|---|---|---|
+| 01 | node-toolchain | 0 | — | AC 13 (.gitignore), 24 (versions), 25 (workspace) |
+| 02 | lua-toolchain | 1 | 01 | AC 15; lua:test green; addon + stub seeds |
+| 03 | contracts | 1 | 01 | AC 25 (contracts); every parent type exported |
+| 04 | repo-meta | 2 | 01, 02 | AC 18, 19, 23, 24 |
+| 05 | build-db | 2 | 01, 02 | AC 13 (builddb) |
+| 06 | codec | 2 | 02, 03 | AC 3, 4 (codec) |
+| 07 | addon-context | 2 | 02, 03 | AC 11, 14, 16 (context.snapshot) |
+| 08 | providers | 2 | 03 | AC 7, 17 (describe) |
+| 09 | addon-window | 3 | 02, 03, 07 | AC 12, 16, 22 (dropdown) |
+| 10 | addon-panels | 3 | 02, 03 | AC 16 (settings.panel), 20 |
+| 11 | chats-core | 3 | 03 | AC 8, 17 (settings.apply), 22 (lifecycle) |
+| 12 | mcp-server | 3 | 03, 05 | AC 9, 10 |
+| 13 | game-link | 3 | 06 | AC 4 (link.ack), 5 |
+| 14 | daemon | 4 | 08, 11, 12, 13 | AC 1, 2, 6 (closure), 9 (waypoint_run), 21 |
+
+## Slices
+[01](wow-companion-v1/01-node-toolchain.md) node toolchain · [02](wow-companion-v1/02-lua-toolchain.md) lua toolchain, guard, addon seed · [03](wow-companion-v1/03-contracts.md) contracts · [04](wow-companion-v1/04-repo-meta.md) repo automation and policy · [05](wow-companion-v1/05-build-db.md) QuestieDB build · [06](wow-companion-v1/06-codec.md) pixel codec · [07](wow-companion-v1/07-addon-context.md) addon game context · [08](wow-companion-v1/08-providers.md) providers · [09](wow-companion-v1/09-addon-window.md) chat window and routing · [10](wow-companion-v1/10-addon-panels.md) settings and report · [11](wow-companion-v1/11-chats-core.md) chats core · [12](wow-companion-v1/12-mcp-server.md) MCP server · [13](wow-companion-v1/13-game-link.md) game link · [14](wow-companion-v1/14-daemon.md) daemon wiring and closure
+
+## Open questions
+none
