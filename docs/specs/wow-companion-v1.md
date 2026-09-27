@@ -73,12 +73,13 @@ type CompanionToGame =
   | { t: "chats"; active: string; list: { id: string; name: string; provider: ProviderId; lastAt: number; running: boolean; unread: number }[] }
   | { t: "history"; chat: string; lines: { who: "you" | ProviderId; text: string; at: number }[] }
   | { t: "options"; providers: { id: ProviderId; installed: boolean; enabled: boolean; reason?: string;
-      models: string[]; efforts: Effort[]; current: { model: string; effort?: Effort } }[]; defaultProvider: ProviderId; companionVersion?: string }
+      models: string[]; efforts: Effort[]; current: { model: string; effort?: Effort } }[]; active: Choice; chat?: { id: string } & Choice; companionVersion?: string }
   | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
   | { t: "reply"; id: string; chat: string; provider: ProviderId; summary: string; full: string; waypoint?: Waypoint }
   | { t: "itemreq"; req: string; ids: number[] }
   | { t: "ack"; seq: number }
   | { t: "error"; id?: string; code: ErrorCode; message: string };
+type Choice = { provider: ProviderId; model: string; effort?: Effort };
 type Mention = { kind: "quest"; questId: number } | { kind: "item"; itemId: number; bag?: number; slot?: number; equipSlot?: number };
 type Waypoint = { uiMapId: number; x: number; y: number; label: string };
 type Snapshot = {
@@ -144,7 +145,7 @@ gear: suggest_gear_upgrades → Db.candidates(level, zone, class) : ItemId[] →
       → game C_Item lookup → {t:"items"} → compare(equipped, candidates) : Upgrade[]
 ```
 - Providers run with the chat's cwd = `apps/companion/workspace/` and **read-only tools**: claude `allowedTools: ["mcp__wowc__*","WebSearch","WebFetch"]`, no Bash/Edit/Write; codex `sandboxMode: "read-only"`; cursor without `--force`. Spawned through `cross-spawn`.
-- Lua: no globals except `WoWCompanion_Deliver`, `WoWCompanionDB` (SavedVariables) and slash commands; chat via `ChatFrameUtil.*` and `chatFrame:AddMessage`, never `ChatFrame_*`/`ChatEdit_*`; hooks with `hooksecurefunc`; `[more]` via the Blizzard-registered `addon` link type through `EventRegistry` `SetItemRef`.
+- Lua: no globals except `WoWCompanion_Deliver`, `WoWCompanionDB` (SavedVariables), slash commands, and `WoWCompanion*`-named frames that must be named to join `UISpecialFrames` (Escape closes them; PM decision 2026-09-27); chat via `ChatFrameUtil.*` and `chatFrame:AddMessage`, never `ChatFrame_*`/`ChatEdit_*`; hooks with `hooksecurefunc`; `[more]` via the Blizzard-registered `addon` link type through `EventRegistry` `SetItemRef`.
 
 ## Tests first
 - `codec.roundtrip` — Lua encoder (under Lua 5.1.5) → rendered cell grid → TS decoder yields identical bytes for 0, 1, 500, 5000-byte payloads, multi-frame — AC 3
@@ -173,7 +174,7 @@ gear: suggest_gear_upgrades → Db.candidates(level, zone, class) : ItemId[] →
 - Chats (D11): native dropdown anchored at the top of the Claude window, label = active chat name; entries "New chat", then chats newest first with provider and relative time, running ones marked, unread count shown; right-click entry → Rename / Delete (Blizzard static-popup confirm). Picking reprints `history`. Reply for a chat not shown → `[Claude · <chat>] replied — [open]`.
 - Input: `/ai <text>` from any editbox; the Claude window's own input line sends straight to the companion; `/r` is never redirected (user choice 2026-09-27).
 - `@`: after `@` + 2 chars in the Claude window's input line, popup above that line, max 8 rows (quest icon / item quality colour), Up/Down move, Tab or Enter accepts, Esc closes; inline grey ghost of the top match, Tab accepts; accepted token shows as `@[Name]`. Sub-commands of `/ai` (`new`, `chat`, `settings`, `report`, `reset`, `cancel`, `help`, `context`) get the same ghost completion.
-- Settings: `Settings.RegisterVerticalLayoutCategory("WoW Companion")` (verify the exact Settings API names on the `forever` branch into `docs/client-facts.md`); Provider dropdown (uninstalled/disabled providers shown disabled with `reason` as tooltip), Model dropdown filled from that provider's `models`, Effort dropdown from `efforts` (disabled when empty), checkbox "This chat only". Change → `{t:"settings"}`; the Claude window prints `[Claude] now using <provider> · <model> · <effort>`. Before the first `options` message the panel shows "Companion offline" and disables the dropdowns.
+- Settings: `Settings.RegisterVerticalLayoutCategory("WoW Companion")` (verify the exact Settings API names on the `forever` branch into `docs/client-facts.md`); Provider dropdown (uninstalled/disabled providers shown disabled with `reason` as tooltip), Model dropdown filled from that provider's `models`, Effort dropdown from `efforts` (disabled when empty), checkbox "This chat only". `options` carries the global choice (`active`) and the active chat's own choice when it has one (`chat`); the companion sends `options` on every `hello`, after every `settings` message (applied or refused) and whenever the active chat changes. The checkbox sends nothing: it selects which choice the dropdowns show (`chat` when checked, falling back to `active`; `active` when unchecked) and where the next dropdown change goes. A dropdown change sends `{t:"settings"}` and is pending until the next `options`; the panel always shows the last `options`, never an unconfirmed value. When that `options` confirms the change, the Claude window prints `[Claude] now using <provider> · <model> · <effort>`; an `error` for it is printed there instead (both through `ns.AiWindow.notice(text)`, owned by slice 09). Before the first `options` message the panel shows "Companion offline" and disables the dropdowns.
 - Look and feel (D10): popup = Blizzard tooltip/autocomplete backdrop and `GameFontHighlightSmall`; `[more]` box = Blizzard dialog template with a scrollable read-only editbox; gear button = Blizzard atlas icon; quality colours from `ITEM_QUALITY_COLORS`; sounds from `SOUNDKIT`. The builder lists every template/atlas used in `docs/client-facts.md` with its `forever` source path.
 - Waypoint arrives with a reply: set + super-tracked, line `[Claude] waypoint: <label> (x, y)`.
 - Disconnected: status line `companion offline` and the ask stays queued client-side until hello.
