@@ -39,3 +39,5 @@ The size caps (8 criteria, 6 owned files, 10 tasks per slice) come from measured
 - 12 (from slice 05 cross-check, 2026-09-27): npc.friendly_to is TEXT (the real QuestieDB value is a string); the database layout follows QuestieDB master 365537a as recorded in slice 05's handoff.
 - 09, 10, 13 (from slice 07): uncached equipped items are omitted from a snapshot until their data loads (never an invented item level); ns.Items.details(ids, onDone) is asynchronous.
 - 14 (from slice 12, PM 2026-09-27): McpLaunch.env for the MCP server carries WOWC_RUN, WOWC_DB_PATH and WOWC_PORT, all required (the MCP server has no defaults).
+- 14 (from slice 08 gate, PM 2026-09-27): the provider runId is minted by the companion (matching ^[A-Za-z0-9_-]{1,64}$), never the addon's ask.id passed through; the adapters keep rejecting any other runId.
+- 09, 13 (from slice 09 gate, PM 2026-09-27): ns.Transport.onMessage(fn) is Inbox.lua's registration function; Core.lua registers its dispatcher through it on ADDON_LOADED and never assigns the field.
