@@ -52,3 +52,16 @@ Every catalog package's own `engines.node` is compatible with `24.21.0`: `typesc
 ## Not yet imported (declared for a later slice)
 
 `ignoreDependencies` in `knip.json` until the importing slice lands: `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `better-sqlite3`, `cross-spawn`, `zod`, `@types/cross-spawn`, `@types/better-sqlite3`, plus the workspace `@wow-companion/contracts` dependency of `apps/companion` and `apps/mcp` (import lands in slice 03). Slice 14 empties this list (parent `## Slices`).
+
+## Lua toolchain (client-dialect exception to D16, slice 02, looked up 2026-09-27)
+
+`pnpm run lua:setup` downloads these at install time into `.tools/` (gitignored); not looked up by `latest`/`minimumReleaseAge` — Lua 5.1.5 is pinned to the client's own dialect (parent `## Proof of done`), luacheck is pinned to its newest GitHub release at lookup time.
+
+| Component                                  | Version | URL                                                                                                                      | sha256                                                             | Date recorded |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------- |
+| LuaBinaries (Lua interpreter, Windows x64) | `5.1.5` | `https://sourceforge.net/projects/luabinaries/files/5.1.5/Tools%20Executables/lua-5.1.5_Win64_bin.zip/download`          | `5f34cf7d40a20a587ea351482a4207d93b92ef6f1983e910a13338253819fe93` | 2026-09-27    |
+| LuaBinaries (Lua interpreter, Linux x64)   | `5.1.5` | `https://sourceforge.net/projects/luabinaries/files/5.1.5/Tools%20Executables/lua-5.1.5_Linux515_64_bin.tar.gz/download` | `88c4ca5863b2690e4e56e84bfc4059c497d60d9d344662da204aa456fedaf6bf` | 2026-09-27    |
+| luacheck (standalone binary, Windows x64)  | `1.2.0` | `https://github.com/lunarmodules/luacheck/releases/download/v1.2.0/luacheck.exe`                                         | `0f1c69c4d09f1ebb4d8df14c215e4553e2e639bd4cb7bf3c639b0daa6198317b` | 2026-09-27    |
+| luacheck (standalone binary, Linux x64)    | `1.2.0` | `https://github.com/lunarmodules/luacheck/releases/download/v1.2.0/luacheck`                                             | `d68da17fca0697d9e2fb04201f3884abd259fa558b3a449bccaed47f1390defc` | 2026-09-27    |
+
+Lookup: LuaBinaries version and files from the project's SourceForge RSS feed (`https://sourceforge.net/projects/luabinaries/rss?path=/5.1.5`), pinned by the parent spec (not a `latest` lookup — the client dialect is fixed). luacheck version and asset URLs from `https://api.github.com/repos/lunarmodules/luacheck/releases/latest` → `tag_name: v1.2.0` (PM decision 2026-09-27: luacheck is not installed on this machine and is not an npm package, so it is fetched the same way as the Lua interpreter). sha256 computed locally on the downloaded bytes (`sha256sum`) and pinned in `scripts/lib/lua-toolchain-specs.ts`; `pnpm run lua:setup` refuses to install a download whose hash does not match.
