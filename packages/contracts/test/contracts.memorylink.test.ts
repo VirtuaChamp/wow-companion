@@ -5,7 +5,14 @@ import type { GameToCompanion } from "../src/types.ts";
 describe("contracts.memorylink", () => {
   it("push then messages() yields pushed messages in order", async () => {
     const link = createMemoryLink();
-    const first: GameToCompanion = { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 };
+    const first: GameToCompanion = {
+      t: "hello",
+      v: 1,
+      build: "1.60.1.70009",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    };
     const second: GameToCompanion = { t: "state", seq: 1, delta: {} };
 
     link.push(first);
@@ -21,7 +28,14 @@ describe("contracts.memorylink", () => {
 
   it("yields a message pushed after the consumer is already waiting", async () => {
     const link = createMemoryLink();
-    const message: GameToCompanion = { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 };
+    const message: GameToCompanion = {
+      t: "hello",
+      v: 1,
+      build: "1.60.1.70009",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    };
 
     const iterator = link.messages()[Symbol.asyncIterator]();
     const pending = iterator.next();
@@ -65,10 +79,24 @@ describe("contracts.memorylink", () => {
     const link = createMemoryLink();
     expect(link.status().build).toBeUndefined();
 
-    link.push({ t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 });
+    link.push({
+      t: "hello",
+      v: 1,
+      build: "1.60.1.70009",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    });
     expect(link.status().build).toBe("1.60.1.70009");
 
-    link.push({ t: "hello", v: 1, build: "1.61.0.70100", iface: 16001 });
+    link.push({
+      t: "hello",
+      v: 1,
+      build: "1.61.0.70100",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    });
     expect(link.status().build).toBe("1.61.0.70100");
   });
 
@@ -88,7 +116,14 @@ describe("contracts.memorylink", () => {
 
   it("return() on an abandoned iterator removes its waiter so no pushed message is lost", async () => {
     const link = createMemoryLink();
-    const message: GameToCompanion = { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 };
+    const message: GameToCompanion = {
+      t: "hello",
+      v: 1,
+      build: "1.60.1.70009",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    };
 
     const iterator = link.messages()[Symbol.asyncIterator]();
     iterator.next();
@@ -124,7 +159,14 @@ describe("contracts.memorylink", () => {
 
   it("a push after return() is still delivered to a second, live iterator", async () => {
     const link = createMemoryLink();
-    const message: GameToCompanion = { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 };
+    const message: GameToCompanion = {
+      t: "hello",
+      v: 1,
+      build: "1.60.1.70009",
+      iface: 16001,
+      session: "sess-1",
+      slot: 1,
+    };
 
     const ended = link.messages()[Symbol.asyncIterator]();
     const pendingEnded = ended.next();

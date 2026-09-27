@@ -61,7 +61,7 @@ export type Upgrade = {
 export type McpLaunch = { command: string; args: string[]; env: Record<string, string> };
 
 export type GameToCompanion =
-  | { t: "hello"; v: 1; build: string; iface: number }
+  | { t: "hello"; v: 1; build: string; iface: number; session: string; slot: number }
   | { t: "state"; seq: number; delta: Partial<Snapshot> }
   | { t: "ask"; id: string; chat: string; text: string; mentions: Mention[] }
   | { t: "items"; req: string; items: ItemDetail[] }

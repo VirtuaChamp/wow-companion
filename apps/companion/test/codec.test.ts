@@ -386,7 +386,7 @@ describe("codec.rejects", () => {
   });
 
   it("delivers a single-frame message only once despite repeated captures", () => {
-    const json = '{"t":"hello","v":1,"build":"x","iface":1}';
+    const json = '{"t":"hello","v":1,"build":"x","iface":1,"session":"s1","slot":1}';
     const frame: Frame = {
       version: 1,
       seq: 50,
@@ -406,7 +406,7 @@ describe("codec.rejects", () => {
   });
 
   it("delivers a multi-frame message only once despite a repainted frame after completion", () => {
-    const json = '{"t":"hello","v":1,"build":"x","iface":1}';
+    const json = '{"t":"hello","v":1,"build":"x","iface":1,"session":"s1","slot":1}';
     const bytes = new TextEncoder().encode(json);
     const chunkSize = Math.ceil(bytes.length / 3);
     const chunks = [
@@ -532,7 +532,7 @@ describe("codec.rejects", () => {
   });
 
   it("assembles a 3-frame message from repeated and interleaved frames", () => {
-    const json = '{"t":"hello","v":1,"build":"x","iface":1}';
+    const json = '{"t":"hello","v":1,"build":"x","iface":1,"session":"s1","slot":1}';
     const bytes = new TextEncoder().encode(json);
     const chunkSize = Math.ceil(bytes.length / 3);
     const chunks = [
@@ -559,7 +559,14 @@ describe("codec.rejects", () => {
     }
     expect(lastMessage?.ok).toBe(true);
     if (lastMessage?.ok === true) {
-      expect(lastMessage.value).toEqual({ t: "hello", v: 1, build: "x", iface: 1 });
+      expect(lastMessage.value).toEqual({
+        t: "hello",
+        v: 1,
+        build: "x",
+        iface: 1,
+        session: "s1",
+        slot: 1,
+      });
     }
   });
 

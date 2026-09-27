@@ -350,8 +350,22 @@ export function parseItemDetailArray(value: unknown): ItemDetail[] | undefined {
 function parseHello(
   value: Record<string, unknown>,
 ): Extract<GameToCompanion, { t: "hello" }> | undefined {
-  if (value.v !== 1 || !isString(value.build) || !isNumber(value.iface)) return undefined;
-  return { t: "hello", v: 1, build: value.build, iface: value.iface };
+  if (
+    value.v !== 1 ||
+    !isString(value.build) ||
+    !isNumber(value.iface) ||
+    !isString(value.session) ||
+    !isNumber(value.slot)
+  )
+    return undefined;
+  return {
+    t: "hello",
+    v: 1,
+    build: value.build,
+    iface: value.iface,
+    session: value.session,
+    slot: value.slot,
+  };
 }
 
 function parseStateMessage(

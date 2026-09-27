@@ -113,7 +113,7 @@ const main = async (): Promise<void> => {
   mkdirSync(toolsDir, { recursive: true });
   const luaExit = await setupLua();
   const luacheckExit = await setupLuacheck();
-  process.exit(luaExit !== 0 ? luaExit : luacheckExit);
+  process.exitCode = luaExit !== 0 ? luaExit : luacheckExit;
 };
 
 await main();
