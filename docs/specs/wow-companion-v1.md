@@ -73,7 +73,7 @@ type CompanionToGame =
   | { t: "chats"; active: string; list: { id: string; name: string; provider: ProviderId; lastAt: number; running: boolean; unread: number }[] }
   | { t: "history"; chat: string; lines: { who: "you" | ProviderId; text: string; at: number }[] }
   | { t: "options"; providers: { id: ProviderId; installed: boolean; enabled: boolean; reason?: string;
-      models: string[]; efforts: Effort[]; current: { model: string; effort?: Effort } }[]; defaultProvider: ProviderId }
+      models: string[]; efforts: Effort[]; current: { model: string; effort?: Effort } }[]; defaultProvider: ProviderId; companionVersion?: string }
   | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
   | { t: "reply"; id: string; chat: string; provider: ProviderId; summary: string; full: string; waypoint?: Waypoint }
   | { t: "itemreq"; req: string; ids: number[] }
