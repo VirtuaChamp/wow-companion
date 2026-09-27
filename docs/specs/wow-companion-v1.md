@@ -148,7 +148,7 @@ gear: suggest_gear_upgrades → Db.candidates(level, zone, class) : ItemId[] →
 
 ## Tests first
 - `codec.roundtrip` — Lua encoder (under Lua 5.1.5) → rendered cell grid → TS decoder yields identical bytes for 0, 1, 500, 5000-byte payloads, multi-frame — AC 3
-- `codec.rejects` — flipped bit, wrong magic, truncated, wrong crc, out-of-order index → `bad_frame`, never a partial message — AC 4
+- `codec.rejects` — flipped bit, wrong magic, truncated, wrong crc, an index at or above `total`, the same `seq` with a different `total` → `bad_frame`, never a partial message; frames may arrive in any order and repeated captures of a frame or of a completed message are ignored (PM decision 2026-09-27, slice 06) — AC 4
 - `slots.write` — writes a valid Lua literal escaping `]]`, `\`, quotes, newlines; round-trips through Lua 5.1.5 `loadstring` — AC 5
 - `slots.exhausted` — 201st delivery → `slots_exhausted` — AC 5
 - `link.batch` — through `GameLink`: messages sent while a slot is pending land in one slot; a superseded `progress` for the same `id` is dropped — AC 5
