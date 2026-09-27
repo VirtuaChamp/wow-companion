@@ -13,7 +13,7 @@ wow-companion-v1-04-repo-meta
 none
 
 ## Scope
-Owned: `.github/workflows/{ci,release,release-please,pr-title}.yml`, `.github/dependabot.yml`, `.github/rulesets/{master,release-tags}.json`, `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS`, `release-please-config.json`, `.release-please-manifest.json`, `docs/branching.md`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`; `docs/versions.md` append-only (GitHub Action rows below 01's rows).
+Owned: `.github/workflows/{ci,release,release-please,pr-title}.yml`, `.github/dependabot.yml`, `.github/rulesets/{master,release-tags}.json`, `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS`, `release-please-config.json`, `.release-please-manifest.json`, `docs/branching.md`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `scripts/actionlint.ts` (downloads the actionlint release binary into `.tools/actionlint/` if absent, runs it over `.github/workflows/`; run by `pnpm run lint:actions`; PM decision 2026-09-27: actionlint is not installed on this machine); `docs/versions.md` append-only (GitHub Action rows below 01's rows).
 Declarative files only; the file-count cap does not apply (see `SHARED-FILES.md`).
 
 ## Code shape

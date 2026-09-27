@@ -13,15 +13,15 @@ wow-companion-v1-02-lua-toolchain
 Creates the seeds every addon slice fills: `addon/WoWCompanion/WoWCompanion.toc`, one empty module per addon file, `tests/lua/stubs/*.lua`, `tests/lua/globals/*.lua`, `docs/client-facts.md` section skeleton (see `SHARED-FILES.md` for owners).
 
 ## Scope
-Owned: `scripts/lua-setup.ts`, `scripts/lua-test.ts`, `scripts/guard.ts`, `tests/lua/bit_shim.lua`, `tests/lua/wow_stubs.lua`, `.luacheckrc`.
+Owned: `scripts/lua-setup.ts`, `scripts/lua-test.ts`, `scripts/lua-lint.ts`, `scripts/guard.ts`, `tests/lua/bit_shim.lua`, `tests/lua/wow_stubs.lua`, `.luacheckrc`.
 Seeded here, owned afterwards by the slice named in `SHARED-FILES.md`: `addon/WoWCompanion/WoWCompanion.toc` (final file list: `Codec.lua`, `Inbox.lua`, `Core.lua`, `State.lua`, `Items.lua`, `Mention.lua`, `Waypoint.lua`, `AiWindow.lua`, `Settings.lua`, `Report.lua`; `## Interface: 16001`, `## Version: 0.1.0`, `## SavedVariables: WoWCompanionDB`), each of those `.lua` files as `local _, ns = ...` and nothing else, `tests/lua/stubs/{transport,context,chat,panels}.lua` and `tests/lua/globals/{transport,context,chat,panels}.lua` (empty tables), `docs/client-facts.md` with one heading per section: Client (this slice fills it), Transport (13), Items and waypoint (07), Chat window and edit box (09), Settings and report (10), Providers (08).
 
 `wow_stubs.lua` loads `bit_shim.lua` and every `stubs/*.lua` in a fixed list; `.luacheckrc` builds `read_globals` from `globals/*.lua` the same way, so no addon slice edits either loader.
 
 ## Code shape
-- `lua:setup` downloads LuaBinaries 5.1.5 into `.tools/lua51/` (Windows and Linux), idempotent.
+- `lua:setup` downloads LuaBinaries 5.1.5 into `.tools/lua51/` and the standalone luacheck release binary (lunarmodules/luacheck GitHub release, version recorded in `docs/versions.md` rows appended below 01's) into `.tools/luacheck/`, Windows and Linux, idempotent (PM decision 2026-09-27: luacheck is not installed on this machine and is not an npm package).
 - `lua:test` runs every `tests/lua/*_test.lua` under that binary, non-zero on any failure, prints each test name.
-- `lua:lint` = luacheck `--std lua51` + the 5.2+ syntax ban over `addon/` (parent `## Proof of done`).
+- `lua:lint` = `scripts/lua-lint.ts` running `.tools/luacheck/` luacheck `--std lua51` + the 5.2+ syntax ban over `addon/` (parent `## Proof of done`).
 - `guard` = every grep of parent `## Must not change` plus: every `uses:` in `.github/workflows/*.yml` pinned to a 40-hex SHA with a `# vX.Y.Z` comment (parent AC 24). Exits non-zero naming file:line.
 
 ## Tests first
