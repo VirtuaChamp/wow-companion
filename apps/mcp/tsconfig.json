@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "."
+  },
+  "references": [{ "path": "../../packages/contracts" }],
+  "include": ["src", "test"]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "wow-companion",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint .",
+    "format:check": "oxfmt --check .",
+    "knip": "knip",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "start": "node apps/companion/src/main.ts",
+    "mcp": "node apps/mcp/src/server.ts",
+    "lua:setup": "node scripts/lua-setup.ts",
+    "lua:test": "node scripts/lua-test.ts",
+    "lua:lint": "node scripts/lua-lint.ts",
+    "lint:actions": "node scripts/actionlint.ts",
+    "guard": "node scripts/guard.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:",
+    "@types/node": "catalog:",
+    "better-sqlite3": "catalog:",
+    "knip": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": "24.21.0"
+  },
+  "packageManager": "pnpm@12.6.0"
+}

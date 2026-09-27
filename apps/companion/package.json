@@ -1,0 +1,17 @@
+{
+  "name": "@wow-companion/companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/main.ts",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@anthropic-ai/sdk": "catalog:",
+    "@wow-companion/contracts": "workspace:*",
+    "cross-spawn": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "catalog:"
+  }
+}
