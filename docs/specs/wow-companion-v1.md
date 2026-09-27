@@ -58,12 +58,12 @@ No public API. Three internal contracts, written down so lanes build in parallel
 
 **Pixel frame (game → companion).** Cells of 4×4 physical pixels at the top-left of UIParent, scaled by `768 / physicalScreenHeight`; each cell one of 8 pure colours = 3 bits. Frame bytes: `magic 0x57 0x43 | version u8 | seq u16 | total u8 | index u8 | length u16 | payload | crc16-CCITT u16` (big-endian). A message longer than one frame is split (`total`/`index`). Payload is UTF-8 JSON.
 
-**Reply slot (companion → game).** 200 LoadOnDemand addons `WoWCompanion_Rnnn` generated at setup, each with one file `r.lua` whose only statement is `WoWCompanion_Deliver(<lua table literal>)`. Readiness: `sig/nnn.wav` empty = not ready, valid = ready (`PlaySoundFile` return); presence heartbeat `alive/kkkk.wav`. Pool exhausted → the addon asks the user to `/reload` (hardware event required).
+**Reply slot (companion → game).** 200 LoadOnDemand addons `WoWCompanion_Rnnn` generated at setup, each with one file `r.lua` whose only statement is `WoWCompanion_Deliver(<lua table literal>)`. Each slot call is `WoWCompanion_Deliver(<session>, <lua table literal>)`: `session` is the token the addon generated at load and sent in `hello`, and the addon ignores a delivery whose token is not its current one, so a slot left over from before a `/reload` is never applied (PM decision 2026-09-27). Readiness: `sig/nnn.wav` empty = not ready, valid = ready (`PlaySoundFile` return); presence heartbeat `alive/kkkk.wav`. Pool exhausted → the addon asks the user to `/reload` (hardware event required).
 
 **Messages** (JSON in frames; Lua tables in slots):
 ```ts
 type GameToCompanion =
-  | { t: "hello"; v: 1; build: string; iface: number }
+  | { t: "hello"; v: 1; build: string; iface: number; session: string }
   | { t: "state"; seq: number; delta: Partial<Snapshot> }
   | { t: "ask"; id: string; chat: string; text: string; mentions: Mention[] }
   | { t: "items"; req: string; items: ItemDetail[] }
