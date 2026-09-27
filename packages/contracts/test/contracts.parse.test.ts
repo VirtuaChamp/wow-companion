@@ -106,6 +106,21 @@ const companionToGameSamples: CompanionToGame[] = [
     ],
     defaultProvider: "claude",
   },
+  {
+    t: "options",
+    providers: [
+      {
+        id: "claude",
+        installed: true,
+        enabled: true,
+        models: ["opus"],
+        efforts: ["medium"],
+        current: { model: "opus", effort: "medium" },
+      },
+    ],
+    defaultProvider: "claude",
+    companionVersion: "0.4.2",
+  },
   { t: "progress", id: "ask-1", status: "thinking" },
   { t: "progress", id: "ask-1", status: "tool", detail: "find_npc" },
   {
@@ -170,6 +185,17 @@ describe("contracts.parse", () => {
       error: "bad_frame",
     });
     expect(parseCompanionToGame({ t: "ack", seq: "5" })).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects a non-string options.companionVersion", () => {
+    expect(
+      parseCompanionToGame({
+        t: "options",
+        providers: [],
+        defaultProvider: "claude",
+        companionVersion: 42,
+      }),
+    ).toEqual({ ok: false, error: "bad_frame" });
   });
 
   it("rejects an extra unknown t alongside otherwise valid fields", () => {

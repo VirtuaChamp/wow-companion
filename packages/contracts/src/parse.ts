@@ -516,7 +516,16 @@ function parseOptionsMessage(
   const providers = parseArrayField(value.providers, parseOptionsProviderEntry);
   if (providers === undefined) return undefined;
   if (!isOneOf(value.defaultProvider, providerIds)) return undefined;
-  return { t: "options", providers, defaultProvider: value.defaultProvider };
+  const message: Extract<CompanionToGame, { t: "options" }> = {
+    t: "options",
+    providers,
+    defaultProvider: value.defaultProvider,
+  };
+  if (value.companionVersion !== undefined) {
+    if (!isString(value.companionVersion)) return undefined;
+    message.companionVersion = value.companionVersion;
+  }
+  return message;
 }
 
 function parseProgressMessage(

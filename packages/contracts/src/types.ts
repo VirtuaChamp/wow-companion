@@ -99,6 +99,7 @@ export type CompanionToGame =
         current: { model: string; effort?: Effort };
       }[];
       defaultProvider: ProviderId;
+      companionVersion?: string;
     }
   | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
   | {
