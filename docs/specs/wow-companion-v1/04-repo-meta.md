@@ -17,7 +17,7 @@ Owned: `.github/workflows/{ci,release,release-please,pr-title}.yml`, `.github/de
 Declarative files only; the file-count cap does not apply (see `SHARED-FILES.md`).
 
 ## Code shape
-No application code. Every action SHA resolved live (`gh api repos/<owner>/<action>/git/ref/tags/<tag>`) and added to `docs/versions.md` — the one line in that file this slice appends (01 owns the file; append-only below the last row).
+No application code. Every action SHA resolved live (`git ls-remote https://github.com/<owner>/<action> refs/tags/<tag>`, peeled `^{}` sha for annotated tags; the `gh` CLI is not installed) and added to `docs/versions.md` — the one line in that file this slice appends (01 owns the file; append-only below the last row).
 
 ## Tests first
 - none beyond `actionlint` and `pnpm run guard` (SHA pins) — AC 18, 24
