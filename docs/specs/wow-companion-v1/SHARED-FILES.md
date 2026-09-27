@@ -5,6 +5,7 @@ These files are touched by more than one slice. Each is created once by a seedin
 | Shared file | Created by | Later edits | What each adds |
 |---|---|---|---|
 | `package.json`, `apps/*/package.json`, `packages/contracts/package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml` | 01 | none (frozen) | 01 declares every dependency of every slice; a missing one is raised to the PM, who adds it on the base before the next wave |
+| `vitest.config.ts` | 01 | 03 | 03 removes `passWithNoTests` once its first test exists |
 | `knip.json` | 01 | 14 | 01: `ignoreDependencies` for packages not yet imported; 14 empties it |
 | `docs/versions.md` | 01 | 04 | 01: Node + npm rows; 04 appends GitHub Action rows below them |
 | `addon/WoWCompanion/WoWCompanion.toc` | 02 | 04 (release-please `## Version` bump config only, no edit) | final file list; no slice edits it |
