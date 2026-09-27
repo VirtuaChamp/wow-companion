@@ -1,1 +1,1 @@
-return {}
+return { "CreateFrame", "UIParent", "GetPhysicalScreenSize" }
