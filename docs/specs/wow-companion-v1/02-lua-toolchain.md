@@ -26,7 +26,7 @@ Seeded here, owned afterwards by the slice named in `SHARED-FILES.md`: `addon/Wo
 
 ## Tests first
 - `guard.detects` — vitest: a temp tree with one planted violation per rule → guard fails naming it; a clean tree → exit 0 — AC 15
-- `bitshim.ops` (Lua) — `band`, `bor`, `bxor`, `lshift`, `rshift` on 0, 1, 0xFFFF, 0xFFFFFFFF match the client's 32-bit semantics — AC 15
+- `bitshim.ops` (Lua) — `band`, `bor`, `bxor`, `lshift`, `rshift` on 0, 1, 0xFFFF and 0x7FFFFFFF give the results signed and unsigned 32-bit semantics agree on, and any operand or result at or above 2^31 raises an error (the client's behaviour there is unverified; PM decision 2026-09-27, in-client `/dump bit.bnot(0), bit.lshift(1,31)` on the post-deploy list) — AC 15
 
 ## Must not change
 - Parent `## Must not change` in full; `pnpm-lock.yaml` and every `package.json` (frozen by 01).

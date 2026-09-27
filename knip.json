@@ -6,11 +6,11 @@
       "project": ["scripts/**/*.ts"]
     },
     "apps/companion": {
-      "entry": ["src/main.ts"],
+      "entry": ["src/main.ts", "src/adapters/**/*.ts", "src/core/**/*.ts", "src/transport/**/*.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "apps/mcp": {
-      "entry": ["src/server.ts"],
+      "entry": ["src/server.ts", "src/**/*.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "packages/contracts": {
@@ -18,7 +18,7 @@
       "project": ["src/**/*.ts", "test/**/*.ts"]
     }
   },
-  "ignoreBinaries": ["luacheck"],
+  "ignoreBinaries": ["luacheck", "claude", "codex", "cursor-agent"],
   "ignoreDependencies": [
     "@anthropic-ai/claude-agent-sdk",
     "@anthropic-ai/sdk",
