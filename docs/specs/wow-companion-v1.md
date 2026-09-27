@@ -130,7 +130,7 @@ interface Provider {
       onEvent: (e: ProviderEvent) => void): Promise<Result<{ sessionId: string; text: string }, ProviderError>>;
 }
 type CreateProvider = (config: ProviderConfig) => Provider;
-type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string } | { kind: "session"; id: string };
+type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string; failure?: string } | { kind: "session"; id: string };
 ```
 `ProviderConfig.models` is `config.json` `providers.<id>.models` (possibly empty), the fallback when the provider cannot list its own; an adapter never hardcodes a model list (PM decision 2026-09-27). `ErrorCode` is the wire union inside `{t:"error"}`; each module returns only its own slice. `cwd`, the MCP launch and the read-only tool policy are fixed at construction; only the run id varies per call.
 Paths:
