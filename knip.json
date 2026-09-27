@@ -1,0 +1,33 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.ts"],
+      "project": ["scripts/**/*.ts"]
+    },
+    "apps/companion": {
+      "entry": ["src/main.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "apps/mcp": {
+      "entry": ["src/server.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/contracts": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    }
+  },
+  "ignoreBinaries": ["luacheck"],
+  "ignoreDependencies": [
+    "@anthropic-ai/claude-agent-sdk",
+    "@anthropic-ai/sdk",
+    "@modelcontextprotocol/sdk",
+    "better-sqlite3",
+    "cross-spawn",
+    "zod",
+    "@types/cross-spawn",
+    "@types/better-sqlite3",
+    "@wow-companion/contracts"
+  ]
+}

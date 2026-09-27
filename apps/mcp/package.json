@@ -1,0 +1,16 @@
+{
+  "name": "@wow-companion/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/server.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
+    "@wow-companion/contracts": "workspace:*",
+    "better-sqlite3": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "catalog:"
+  }
+}

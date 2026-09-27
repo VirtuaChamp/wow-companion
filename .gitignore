@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+/data/
+apps/companion/state/
+config.json
+.env*
+!.env.example
+.tools/
+.claude/output/
+
+HANDOFF-INTENT.md
+.owned-files
