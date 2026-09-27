@@ -486,6 +486,13 @@ describe("contracts.parse", () => {
     });
   });
 
+  it("accepts a state message whose empty delta was encoded as [] (the codec's empty-table rule)", () => {
+    expect(parseGameToCompanion({ t: "state", seq: 1, delta: [] })).toEqual({
+      ok: true,
+      value: { t: "state", seq: 1, delta: {} },
+    });
+  });
+
   it("round-trips a full Snapshot through parseSnapshot", () => {
     const snapshot: Snapshot = {
       character: {

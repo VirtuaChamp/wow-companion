@@ -278,6 +278,7 @@ function parseTalent(value: unknown): Snapshot["talents"][number] | undefined {
 }
 
 function parseSnapshotDelta(value: unknown): Partial<Snapshot> | undefined {
+  if (Array.isArray(value)) return value.length === 0 ? {} : undefined;
   if (!isRecord(value)) return undefined;
   const delta: Partial<Snapshot> = {};
   if (value.character !== undefined) {
