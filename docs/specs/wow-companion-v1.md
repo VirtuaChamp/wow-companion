@@ -118,7 +118,7 @@ Guarantees: `send` batches every message queued since the last delivered slot in
 type ProviderId = "claude" | "codex" | "cursor";
 type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "session_unknown" | "timeout" | "cancelled";
+type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "provider_failed" | "session_unknown" | "timeout" | "cancelled";
 type LinkError = "too_large" | "slots_exhausted";
 type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
 type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
