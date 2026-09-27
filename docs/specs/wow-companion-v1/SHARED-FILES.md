@@ -28,4 +28,5 @@ Merge order within a wave: ascending slice id.
 The size caps (8 criteria, 6 owned files, 10 tasks per slice) come from measured builder failures; the 5-10 slice count is a guide against over-splitting. Where they conflict the caps win. The only cap exceptions are 01, 02 and 04, whose extra files are declarative config, seeds and templates with no logic; their task count stays under 10.
 
 ## Open slice findings
-none yet
+- 04 (from slice 01 gate, 2026-09-27): the apps run on Node native type stripping, which refuses files under node_modules. release.yml must ship packages/contracts/src as real files outside node_modules (no symlink dereference into node_modules), and the release check must run node apps/mcp/src/server.ts from the unzipped artifact.
+- every TS slice: runtime is node <file>.ts (erasable TypeScript only, relative imports end in .ts), see AGENTS.md.
