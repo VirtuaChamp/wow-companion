@@ -122,7 +122,7 @@ type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" 
 type LinkError = "too_large" | "slots_exhausted";
 type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
 type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
-type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number };
+type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number; models: readonly string[] };
 interface Provider {
   id: ProviderId;
   describe(): Promise<{ installed: boolean; enabled: boolean; reason?: string; models: string[]; efforts: Effort[] }>;
@@ -132,7 +132,7 @@ interface Provider {
 type CreateProvider = (config: ProviderConfig) => Provider;
 type ProviderEvent = { kind: "text"; delta: string } | { kind: "tool"; name: string } | { kind: "session"; id: string };
 ```
-`ErrorCode` is the wire union inside `{t:"error"}`; each module returns only its own slice. `cwd`, the MCP launch and the read-only tool policy are fixed at construction; only the run id varies per call.
+`ProviderConfig.models` is `config.json` `providers.<id>.models` (possibly empty), the fallback when the provider cannot list its own; an adapter never hardcodes a model list (PM decision 2026-09-27). `ErrorCode` is the wire union inside `{t:"error"}`; each module returns only its own slice. `cwd`, the MCP launch and the read-only tool policy are fixed at construction; only the run id varies per call.
 Paths:
 ```
 ask:  AiWindow /ai → Mention.resolve(text) : Mention[] → Transport.send({t:"ask"}) : Result<seq, "busy">
