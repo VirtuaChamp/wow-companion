@@ -13,3 +13,4 @@ config.json
 
 HANDOFF-INTENT.md
 .owned-files
+apps/mcp/test/fixtures/*.sqlite
