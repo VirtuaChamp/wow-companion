@@ -1,5 +1,6 @@
 import { isBoolean, isNumber, isOneOf, isRecord, isString } from "./guards.ts";
 import type {
+  Choice,
   CompanionToGame,
   Effort,
   ErrorCode,
@@ -43,6 +44,7 @@ const errorCodes = literalsOf<ErrorCode>({
   provider_missing: true,
   provider_auth: true,
   provider_disabled: true,
+  provider_failed: true,
   session_unknown: true,
   timeout: true,
   cancelled: true,
@@ -54,6 +56,7 @@ const errorCodes = literalsOf<ErrorCode>({
   no_waypoint_map: true,
   busy: true,
   bad_frame: true,
+  bad_settings: true,
 });
 
 function ok<T>(value: T): Result<T, "bad_frame"> {
@@ -514,6 +517,24 @@ function parseOptionsProviderEntry(
   return entry;
 }
 
+function parseChoice(value: unknown): Choice | undefined {
+  if (!isRecord(value)) return undefined;
+  if (!isOneOf(value.provider, providerIds) || !isString(value.model)) return undefined;
+  const choice: Choice = { provider: value.provider, model: value.model };
+  if (value.effort !== undefined) {
+    if (!isEffort(value.effort)) return undefined;
+    choice.effort = value.effort;
+  }
+  return choice;
+}
+
+function parseChatChoice(value: unknown): ({ id: string } & Choice) | undefined {
+  if (!isRecord(value) || !isString(value.id)) return undefined;
+  const choice = parseChoice(value);
+  if (choice === undefined) return undefined;
+  return { id: value.id, ...choice };
+}
+
 function parseChatsMessage(
   value: Record<string, unknown>,
 ): Extract<CompanionToGame, { t: "chats" }> | undefined {
@@ -537,8 +558,23 @@ function parseOptionsMessage(
 ): Extract<CompanionToGame, { t: "options" }> | undefined {
   const providers = parseArrayField(value.providers, parseOptionsProviderEntry);
   if (providers === undefined) return undefined;
-  if (!isOneOf(value.defaultProvider, providerIds)) return undefined;
-  return { t: "options", providers, defaultProvider: value.defaultProvider };
+  const active = parseChoice(value.active);
+  if (active === undefined) return undefined;
+  const message: Extract<CompanionToGame, { t: "options" }> = {
+    t: "options",
+    providers,
+    active,
+  };
+  if (value.chat !== undefined) {
+    const chat = parseChatChoice(value.chat);
+    if (chat === undefined) return undefined;
+    message.chat = chat;
+  }
+  if (value.companionVersion !== undefined) {
+    if (!isString(value.companionVersion)) return undefined;
+    message.companionVersion = value.companionVersion;
+  }
+  return message;
 }
 
 function parseProgressMessage(

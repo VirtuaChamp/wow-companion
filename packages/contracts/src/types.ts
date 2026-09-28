@@ -5,12 +5,19 @@ export type ProviderError =
   | "provider_missing"
   | "provider_auth"
   | "provider_disabled"
+  | "provider_failed"
   | "session_unknown"
   | "timeout"
   | "cancelled";
 export type LinkError = "too_large" | "slots_exhausted";
 export type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
-export type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
+export type ErrorCode =
+  | ProviderError
+  | LinkError
+  | ToolError
+  | "busy"
+  | "bad_frame"
+  | "bad_settings";
 
 export type Mention =
   | { kind: "quest"; questId: number }
@@ -59,6 +66,7 @@ export type Upgrade = {
   delta: Record<string, number>;
 };
 export type McpLaunch = { command: string; args: string[]; env: Record<string, string> };
+export type Choice = { provider: ProviderId; model: string; effort?: Effort };
 
 export type GameToCompanion =
   | { t: "hello"; v: 1; build: string; iface: number; session: string; slot: number; again?: true }
@@ -98,7 +106,9 @@ export type CompanionToGame =
         efforts: Effort[];
         current: { model: string; effort?: Effort };
       }[];
-      defaultProvider: ProviderId;
+      active: Choice;
+      chat?: { id: string } & Choice;
+      companionVersion?: string;
     }
   | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
   | {
@@ -120,7 +130,12 @@ export interface GameLink {
   status(): { connected: boolean; build?: string; slotsLeft: number; badFrames: number };
 }
 
-export type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number };
+export type ProviderConfig = {
+  cwd: string;
+  mcp: (runId: string) => McpLaunch;
+  timeoutMs: number;
+  models: readonly string[];
+};
 export interface Provider {
   id: ProviderId;
   describe(): Promise<{
@@ -146,5 +161,5 @@ export interface Provider {
 export type CreateProvider = (config: ProviderConfig) => Provider;
 export type ProviderEvent =
   | { kind: "text"; delta: string }
-  | { kind: "tool"; name: string }
+  | { kind: "tool"; name: string; failure?: string }
   | { kind: "session"; id: string };

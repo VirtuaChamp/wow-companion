@@ -1,0 +1,8 @@
+stderr: Reading additional input from stdin...
+{"type":"thread.started","thread_id":"01a0e510-f2f7-7160-b738-a64f71baeb54"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"mcp_tool_call","server":"wowc","tool":"wowc_ping","arguments":{},"result":null,"error":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"mcp_tool_call","server":"wowc","tool":"wowc_ping","arguments":{},"result":{"content":[{"type":"text","text":"pong-from-stub WOWC_RUN=record-codex-stream"}],"structured_content":null},"error":null,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"pong"}}
+{"type":"turn.completed","usage":{"input_tokens":38696,"cached_input_tokens":35072,"cache_write_input_tokens":0,"output_tokens":106,"reasoning_output_tokens":40}}
+exit: 0
