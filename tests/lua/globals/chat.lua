@@ -1,1 +1,19 @@
-return {}
+return {
+  "CreateFrame",
+  "UIParent",
+  "SlashCmdList",
+  "LinkUtil",
+  "LinkTypes",
+  "EventRegistry",
+  "SetItemRef",
+  "strsplit",
+  "GameTooltip",
+  "StaticPopupDialogs",
+  "StaticPopup_Show",
+  "GetServerTime",
+  "NORMAL_FONT_COLOR",
+  "GRAY_FONT_COLOR",
+  "YELLOW_FONT_COLOR",
+  "GameFontHighlightSmall",
+  "ITEM_QUALITY_COLORS",
+}
