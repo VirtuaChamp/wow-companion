@@ -39,7 +39,7 @@ The Claude window's own input line: an addon-owned edit box with the `@` popup, 
 1. `[file]` Parent AC 12. Fixture: `.tools/lua51`
 2. `[file]` Parent AC 16: `aiwindow.create`, `ai.route`, `input.route`, `more.link`. Fixture: `tests/lua/wow_stubs.lua`
 3. `[file]` Parent AC 22, `chats.dropdown`. Fixture: as 2
-4. `[file]` Parent AC 6, Chat window part: `ChatFrameUtil` names, floating undocked window creation, every template/atlas used, the input line's edit-box template and the `/ai` slash registration. Fixture: wow-ui-source `forever` clone
+4. `[file]` Parent AC 6, Chat window part: `ChatFrameUtil` names, the floating window's templates, every template/atlas used, the input line's edit-box template and the `/ai` slash registration. Fixture: wow-ui-source `forever` clone
 
 ## Open questions
 none
