@@ -5,10 +5,13 @@ ns.Transport = { sent = {} }
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
+local optionsCalls = {}
 ns.Settings = {
   onChats = function() end,
   onError = function() end,
-  onOptions = function() end,
+  onOptions = function(msg)
+    table.insert(optionsCalls, msg)
+  end,
 }
 
 local aiWindowChunk = assert(loadfile("addon/WoWCompanion/AiWindow.lua"))
@@ -72,10 +75,89 @@ ns.Core.dispatch({
 local waypointLine = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
 assert(waypointLine:find("||H", 1, true) ~= nil, "a waypoint label with a raw WoW escape is sanitized before printing")
 
+ns.Core.dispatch({
+  t = "reply",
+  id = "ask-refused-waypoint",
+  chat = "default",
+  provider = "claude",
+  summary = "no map",
+  full = "no map",
+  waypoint = { label = "Nowhere", x = 10, y = 20, uiMapId = 999 },
+})
+local refusedLine = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+assert(refusedLine:find("no_waypoint_map", 1, true) ~= nil, "a waypoint the client refuses prints a no_waypoint_map line")
+
+ns.Core.dispatch({ t = "options", active = { provider = "claude" } })
+assert(#optionsCalls == 1, "an options message reaches ns.Settings.onOptions")
+
+local messagesBeforeRepeat = #ns.AiWindow.scrollFrame.messages
+local sentBeforeRepeat = #ns.Transport.sent
+for _ = 1, 2 do
+  ns.Core.dispatch({
+    t = "reply",
+    id = "ask-repeated",
+    chat = "default",
+    provider = "claude",
+    summary = "delivered twice",
+    full = "delivered twice",
+    waypoint = { label = "Once", x = 10, y = 20, uiMapId = 84 },
+  })
+end
+local repeatedCount = 0
+for _, message in ipairs(ns.AiWindow.scrollFrame.messages) do
+  if message.text:find("delivered twice", 1, true) then
+    repeatedCount = repeatedCount + 1
+  end
+end
+assert(repeatedCount == 1, "a reply delivered twice (at-least-once) prints once")
+assert(#ns.AiWindow.scrollFrame.messages == messagesBeforeRepeat + 2, "the repeat prints neither a second reply nor a second waypoint line")
+assert(#ns.Transport.sent == sentBeforeRepeat, "the repeat sends nothing")
+
+for i = 1, 200 do
+  ns.Core.dispatch({ t = "reply", id = "flood-" .. i, chat = "default", provider = "claude", summary = "flood", full = "flood" })
+end
+ns.Core.dispatch({
+  t = "reply",
+  id = "ask-repeated",
+  chat = "default",
+  provider = "claude",
+  summary = "delivered twice",
+  full = "delivered twice",
+})
+local lastAfterBound = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+assert(
+  lastAfterBound:find("delivered twice", 1, true) ~= nil,
+  "the seen-id set is bounded to the 200 most recent ids: the oldest is forgotten"
+)
+
 ns.AiWindow.notice("session |Hexpired|h")
 local noticeMessage = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages]
 assert(noticeMessage.text:find("||H", 1, true) ~= nil, "notice() sanitizes its text")
 assert(noticeMessage.r == 1 and noticeMessage.g == 1 and noticeMessage.b == 0, "notice() prints in the Blizzard system colour")
+
+ns.Transport.sent = {}
+_G.SlashCmdList["AI"]("help me find Hogger")
+assert(#ns.Transport.sent == 1 and ns.Transport.sent[1].t == "ask", "/ai help with trailing text is asked, not run as help")
+assert(ns.Transport.sent[1].text == "help me find Hogger", "the whole line is the question")
+ns.Transport.sent = {}
+_G.SlashCmdList["AI"]("reset the world")
+assert(#ns.Transport.sent == 1 and ns.Transport.sent[1].t == "ask", "/ai reset with trailing text is asked, not sent as reset")
+
+local itemFixture = { { itemId = 1, name = "Sword" } }
+local requestedIds
+ns.Items = {
+  details = function(ids, onDone)
+    requestedIds = ids
+    onDone(itemFixture)
+  end,
+}
+ns.Transport.sent = {}
+ns.Core.dispatch({ t = "itemreq", req = "r1", ids = { 1, 2 } })
+assert(requestedIds ~= nil and #requestedIds == 2, "an itemreq asks ns.Items.details for the requested ids")
+assert(#ns.Transport.sent == 1, "an itemreq is answered with one message")
+assert(ns.Transport.sent[1].t == "items", "the answer is an items message")
+assert(ns.Transport.sent[1].req == "r1", "the answer carries the request id")
+assert(ns.Transport.sent[1].items == itemFixture, "the answer carries the item details")
 
 local registered
 ns.Transport.onMessage = function(fn)

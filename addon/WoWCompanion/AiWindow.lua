@@ -10,6 +10,15 @@ local WINDOW_HEIGHT_DEFAULT = 320
 local POPUP_MAX_ROWS = 8
 local POPUP_ROW_HEIGHT = 16
 local MAX_REPLIES = 200
+local MAX_SEEN_REPLY_IDS = 200
+local RESIZE_MIN_WIDTH = 280
+local RESIZE_MIN_HEIGHT = 180
+local RESIZE_MAX_WIDTH = 900
+local RESIZE_MAX_HEIGHT = 700
+local POPUP_PADDING = 6
+local POPUP_ICON_SIZE = 12
+local QUEST_ICON_ATLAS = "QuestNormal"
+local GEAR_ICON_ATLAS = "questlog-icon-setting"
 
 local frame
 local scrollFrame
@@ -18,10 +27,15 @@ local dropdown
 local popupFrame
 local moreBox
 local resizeGrip
+local ghostText
+local ghostMeasure
+local moreBoxText = ""
 local askCounter = 0
 local moreCounter = 0
 local replies = {}
 local replyOrder = {}
+local seenReplyIds = {}
+local seenReplyOrder = {}
 local chatsList = {}
 local activeChat = "default"
 
@@ -39,6 +53,15 @@ local function rememberReply(id, entry)
   if #replyOrder > MAX_REPLIES then
     local oldest = table.remove(replyOrder, 1)
     replies[oldest] = nil
+  end
+end
+
+local function markReplySeen(id)
+  seenReplyIds[id] = true
+  table.insert(seenReplyOrder, id)
+  if #seenReplyOrder > MAX_SEEN_REPLY_IDS then
+    local oldest = table.remove(seenReplyOrder, 1)
+    seenReplyIds[oldest] = nil
   end
 end
 
@@ -141,6 +164,43 @@ local function restoreGeometry()
   end
 end
 
+local function itemRowColor(item)
+  local mention = item.mention
+  if mention and mention.kind == "item" and mention.itemId then
+    local quality = C_Item.GetItemQualityByID(mention.itemId)
+    local entry = quality and ITEM_QUALITY_COLORS[quality]
+    if entry then
+      return entry.color:GetRGB()
+    end
+  end
+  return NORMAL_FONT_COLOR:GetRGB()
+end
+
+local function ghostRemainder(query, name)
+  if not query or not name or #query > #name then
+    return ""
+  end
+  if name:sub(1, #query):lower() ~= query:lower() then
+    return ""
+  end
+  return name:sub(#query + 1)
+end
+
+local function refreshGhost(remainder)
+  if not ghostText then
+    return
+  end
+  if not remainder or remainder == "" then
+    ghostText:SetText("")
+    return
+  end
+  ghostMeasure:SetText(inputBox:GetText())
+  local insetLeft = inputBox:GetTextInsets()
+  ghostText:ClearAllPoints()
+  ghostText:SetPoint("LEFT", inputBox, "LEFT", insetLeft + ghostMeasure:GetStringWidth(), 0)
+  ghostText:SetText(remainder)
+end
+
 local function refreshPopupFrame()
   if not popupFrame then
     return
@@ -148,25 +208,34 @@ local function refreshPopupFrame()
   local popup = AiWindow.popup
   if not popup or not popup.items or #popup.items == 0 then
     popupFrame:Hide()
+    refreshGhost("")
     return
   end
+  popupFrame:SetHeight(#popup.items * POPUP_ROW_HEIGHT + 2 * POPUP_PADDING)
   for i, row in ipairs(popupFrame.rows) do
     local item = popup.items[i]
     if item then
-      row:SetText(item.name or item)
-      if popup.selected == i then
-        row:SetTextColor(HIGHLIGHT_FONT_COLOR:GetRGB())
+      row.text:SetText(item.name)
+      row.text:SetTextColor(itemRowColor(item))
+      if item.mention and item.mention.kind == "quest" then
+        row.icon:SetAtlas(QUEST_ICON_ATLAS)
+        row.icon:Show()
       else
-        row:SetTextColor(NORMAL_FONT_COLOR:GetRGB())
+        row.icon:Hide()
       end
-      row:Show()
+      if (popup.selected or 1) == i then
+        row.highlight:Show()
+      else
+        row.highlight:Hide()
+      end
+      row.text:Show()
     else
-      row:Hide()
+      row.text:Hide()
+      row.icon:Hide()
+      row.highlight:Hide()
     end
   end
-  if popupFrame.ghost then
-    popupFrame.ghost:SetText(popup.ghost or "")
-  end
+  refreshGhost(ghostRemainder(popup.query, popup.ghost))
   popupFrame:Show()
 end
 
@@ -204,7 +273,7 @@ function AiWindow.updatePopup(text)
     if #matches == 0 then
       AiWindow.popup = nil
     else
-      AiWindow.popup = { kind = "sub", items = matches, ghost = matches[1].name }
+      AiWindow.popup = { kind = "sub", items = matches, ghost = matches[1].name, query = subQuery }
     end
     refreshPopupFrame()
     return AiWindow.popup
@@ -215,7 +284,7 @@ function AiWindow.updatePopup(text)
     if not result.items or #result.items == 0 then
       AiWindow.popup = nil
     else
-      AiWindow.popup = { kind = "mention", items = result.items, ghost = result.ghost }
+      AiWindow.popup = { kind = "mention", items = result.items, ghost = result.ghost, query = query }
     end
     refreshPopupFrame()
     return AiWindow.popup
@@ -343,7 +412,7 @@ _G.StaticPopupDialogs["WOWCOMPANION_RENAME_CHAT"] = {
   whileDead = true,
   hideOnEscape = true,
   OnAccept = function(dialog, chatId)
-    local newName = dialog and dialog.editBox and dialog.editBox:GetText()
+    local newName = dialog:GetEditBox():GetText()
     if newName and newName ~= "" and chatId then
       ns.Transport.send({ t = "cmd", chat = chatId, name = "rename", arg = newName })
     end
@@ -367,7 +436,7 @@ function AiWindow.rebuildDropdown()
   if not dropdown then
     return
   end
-  local now = time()
+  local now = GetServerTime()
   dropdown:SetupMenu(function(_, root)
     root:CreateButton("New chat", function()
       ns.Transport.send({ t = "cmd", chat = activeChat, name = "new" })
@@ -382,18 +451,18 @@ function AiWindow.rebuildDropdown()
         .. " \194\183 "
         .. relativeLabel(now, entry.lastAt)
         .. unread
-      root:CreateButton(label, function()
+      local row = root:CreateButton(label, function()
         ns.Transport.send({ t = "cmd", chat = entry.id, name = "open" })
       end)
-      root:CreateButton("  Rename \226\128\148 " .. sanitize(entry.name), function()
+      row:CreateButton("Rename", function()
         StaticPopup_Show("WOWCOMPANION_RENAME_CHAT", entry.name, nil, entry.id)
       end)
-      root:CreateButton("  Delete \226\128\148 " .. sanitize(entry.name), function()
+      row:CreateButton("Delete", function()
         StaticPopup_Show("WOWCOMPANION_DELETE_CHAT", entry.name, nil, entry.id)
       end)
     end
   end)
-  dropdown:SetText(sanitize(AiWindow.chatName(activeChat)))
+  dropdown:OverrideText(sanitize(AiWindow.chatName(activeChat)))
 end
 
 function AiWindow.onChats(msg)
@@ -409,11 +478,17 @@ function AiWindow.onHistory(msg)
     AiWindow.printLine(line.who, line.text, nil, line.who)
   end
   if dropdown then
-    dropdown:SetText(sanitize(AiWindow.chatName(activeChat)))
+    dropdown:OverrideText(sanitize(AiWindow.chatName(activeChat)))
   end
 end
 
 function AiWindow.onReply(msg)
+  if msg.id then
+    if seenReplyIds[msg.id] then
+      return
+    end
+    markReplySeen(msg.id)
+  end
   if msg.chat == activeChat then
     AiWindow.printLine(msg.provider, msg.summary, msg.full, msg.provider)
   else
@@ -472,10 +547,17 @@ function AiWindow.openMoreBox(fullText)
     moreBox.editBox:SetMultiLine(true)
     moreBox.editBox:SetAutoFocus(true)
     moreBox.editBox:SetWidth(400)
+    moreBox.editBox:SetScript("OnTextChanged", function(box, isUserInput)
+      if isUserInput then
+        box:SetText(moreBoxText)
+        box:HighlightText()
+      end
+    end)
     scroll:SetScrollChild(moreBox.editBox)
     moreBox.scrollFrame = scroll
   end
-  moreBox.editBox:SetText(sanitize(fullText))
+  moreBoxText = sanitize(fullText)
+  moreBox.editBox:SetText(moreBoxText)
   moreBox.editBox:HighlightText()
   moreBox.editBox:SetFocus()
   moreBox:Show()
@@ -600,25 +682,31 @@ local function buildPopup(parent)
   popupFrame = CreateFrame("Frame", "WoWCompanionAiWindowPopup", parent, "TooltipBackdropTemplate")
   popupFrame:SetPoint("BOTTOMLEFT", inputBox, "TOPLEFT", 0, 4)
   popupFrame:SetPoint("RIGHT", inputBox, "RIGHT", 0, 0)
-  popupFrame:SetHeight(POPUP_MAX_ROWS * POPUP_ROW_HEIGHT + 8)
+  popupFrame:SetHeight(POPUP_MAX_ROWS * POPUP_ROW_HEIGHT + 2 * POPUP_PADDING)
   popupFrame:Hide()
   popupFrame.rows = {}
-  local previous
   for i = 1, POPUP_MAX_ROWS do
-    local row = popupFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    if previous then
-      row:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -2)
-    else
-      row:SetPoint("TOPLEFT", popupFrame, "TOPLEFT", 6, -6)
-    end
-    row:SetPoint("RIGHT", popupFrame, "RIGHT", -6, 0)
-    popupFrame.rows[i] = row
-    previous = row
+    local top = -(POPUP_PADDING + (i - 1) * POPUP_ROW_HEIGHT)
+    local highlight = popupFrame:CreateTexture(nil, "BACKGROUND", "UIPanelButtonHighlightTexture")
+    highlight:SetPoint("TOPLEFT", popupFrame, "TOPLEFT", POPUP_PADDING - 2, top)
+    highlight:SetPoint("RIGHT", popupFrame, "RIGHT", -(POPUP_PADDING - 2), 0)
+    highlight:SetHeight(POPUP_ROW_HEIGHT)
+    highlight:Hide()
+    local icon = popupFrame:CreateTexture(nil, "ARTWORK")
+    icon:SetSize(POPUP_ICON_SIZE, POPUP_ICON_SIZE)
+    icon:SetPoint("TOPLEFT", popupFrame, "TOPLEFT", POPUP_PADDING, top - 2)
+    icon:Hide()
+    local text = popupFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    text:SetPoint("TOPLEFT", popupFrame, "TOPLEFT", POPUP_PADDING + POPUP_ICON_SIZE + 4, top - 2)
+    text:SetPoint("RIGHT", popupFrame, "RIGHT", -POPUP_PADDING, 0)
+    popupFrame.rows[i] = { text = text, icon = icon, highlight = highlight }
   end
-  popupFrame.ghost = popupFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-  popupFrame.ghost:SetPoint("BOTTOMLEFT", popupFrame, "TOPLEFT", 6, 2)
-  popupFrame.ghost:SetPoint("BOTTOMRIGHT", popupFrame, "TOPRIGHT", -6, 2)
+  ghostText = inputBox:CreateFontString(nil, "OVERLAY", "ChatFontNormal")
+  ghostText:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  ghostMeasure = inputBox:CreateFontString(nil, "OVERLAY", "ChatFontNormal")
+  ghostMeasure:Hide()
   AiWindow.popupFrame = popupFrame
+  AiWindow.ghostText = ghostText
 end
 
 local function buildDropdown(parent)
@@ -629,12 +717,10 @@ end
 
 local function buildGearButton(parent)
   local gearButton = CreateFrame("Button", "WoWCompanionAiWindowGear", parent)
-  gearButton:SetSize(20, 20)
+  gearButton:SetSize(15, 16)
   gearButton:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -28, -6)
-  local label = gearButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  label:SetPoint("CENTER", gearButton, "CENTER", 0, 0)
-  label:SetText("\226\154\153")
-  gearButton.label = label
+  gearButton:SetNormalAtlas(GEAR_ICON_ATLAS)
+  gearButton:SetHighlightAtlas(GEAR_ICON_ATLAS, "ADD")
   gearButton:SetScript("OnClick", function()
     if ns.Settings and ns.Settings.open then
       ns.Settings.open()
@@ -652,17 +738,10 @@ local function buildGearButton(parent)
 end
 
 local function buildResizeGrip(parent)
-  resizeGrip = CreateFrame("Button", "WoWCompanionAiWindowResizeGrip", parent)
-  resizeGrip:SetSize(16, 16)
+  resizeGrip = CreateFrame("Button", "WoWCompanionAiWindowResizeGrip", parent, "PanelResizeButtonTemplate")
   resizeGrip:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -6, 6)
-  resizeGrip:EnableMouse(true)
-  resizeGrip:SetScript("OnMouseDown", function()
-    parent:StartSizing("BOTTOMRIGHT")
-  end)
-  resizeGrip:SetScript("OnMouseUp", function()
-    parent:StopMovingOrSizing()
-    saveGeometry()
-  end)
+  resizeGrip:Init(parent, RESIZE_MIN_WIDTH, RESIZE_MIN_HEIGHT, RESIZE_MAX_WIDTH, RESIZE_MAX_HEIGHT)
+  resizeGrip:SetOnResizeStoppedCallback(saveGeometry)
   AiWindow.resizeGrip = resizeGrip
 end
 
@@ -677,7 +756,6 @@ function AiWindow.create()
   frame:SetMovable(true)
   frame:SetResizable(true)
   frame:SetClampedToScreen(true)
-  frame:SetResizeBounds(280, 180, 900, 700)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", frame.StartMoving)

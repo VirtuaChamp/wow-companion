@@ -44,4 +44,21 @@ assert(y == -40, "reload restores the saved y position")
 assert(reloaded:GetWidth() == 500, "reload restores the saved width")
 assert(reloaded:GetHeight() == 360, "reload restores the saved height")
 
+local gear = ns2.AiWindow.gearButton
+assert(gear.normalAtlas == "questlog-icon-setting", "the gear button uses Blizzard's settings atlas, not a text glyph")
+assert(gear.highlightAtlas == "questlog-icon-setting", "the gear highlight uses the same atlas")
+assert(gear.highlightBlendMode == "ADD", "the gear highlight blends additively")
+
+local grip = ns2.AiWindow.resizeGrip
+assert(grip.template == "PanelResizeButtonTemplate", "the resize grip is Blizzard's PanelResizeButtonTemplate")
+assert(grip.target == reloaded, "the grip resizes the window frame")
+assert(grip.resizeLimits[1] == 280 and grip.resizeLimits[3] == 900, "the grip carries the window's size limits")
+grip:Fire("OnMouseDown")
+assert(reloaded.sizing == "BOTTOMRIGHT", "pressing the grip starts sizing the window from its bottom right")
+reloaded:SetSize(610, 410)
+grip:Fire("OnMouseUp")
+assert(reloaded.sizing == false, "releasing the grip stops sizing")
+assert(WoWCompanionDB.window.width == 610, "releasing the grip saves the new width")
+assert(WoWCompanionDB.window.height == 410, "releasing the grip saves the new height")
+
 print("aiwindow.create: all assertions passed")

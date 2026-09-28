@@ -5,10 +5,14 @@ ns.Transport = { sent = {} }
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
+local settingsOpenCalls = 0
 ns.Settings = {
   onChats = function() end,
   onError = function() end,
   onOptions = function() end,
+  open = function()
+    settingsOpenCalls = settingsOpenCalls + 1
+  end,
 }
 
 local aiWindowChunk = assert(loadfile("addon/WoWCompanion/AiWindow.lua"))
@@ -49,6 +53,52 @@ local popup1 = ns.AiWindow.popup
 assert(popup1 ~= nil, "a mention query with matches opens the popup")
 assert(#popup1.items >= 1, "at least one candidate matches the query")
 
+local popupFrame = ns.AiWindow.popupFrame
+local rows = popupFrame.rows
+assert(popupFrame:IsShown(), "the popup frame is shown when there are matches")
+assert(rows[1].text:GetText() == "Bagged Trinket", "the top match fills the first row")
+local quality = ITEM_QUALITY_COLORS[3].color
+assert(
+  rows[1].text.textColor.r == quality.r and rows[1].text.textColor.g == quality.g and rows[1].text.textColor.b == quality.b,
+  "an item row takes its item-quality colour"
+)
+assert(rows[1].icon:IsShown() == false, "an item row carries no quest icon")
+assert(rows[1].highlight:IsShown(), "the selected row shows the Blizzard highlight texture")
+assert(rows[#popup1.items + 1].text:IsShown() == false, "rows beyond the matches are hidden")
+assert(popupFrame:GetHeight() == #popup1.items * 16 + 12, "the popup is as tall as its matches, not always eight rows")
+local ghost = ns.AiWindow.ghostText
+assert(ghost:GetText() == "gged Trinket", "the ghost shows only the untyped remainder of the top match")
+local _, ghostRelative, _, ghostX = ghost:GetPoint(1)
+assert(ghostRelative == input, "the ghost sits inside the input line, not above the popup")
+assert(ghostX == 10 + 3 * 6, "the ghost starts after the typed text: text inset plus the width of '@Ba'")
+
+_G.WOWC_TEST_SET_ITEM_INFO(2001, nil)
+input:SetText("@Ba")
+input:Fire("OnTextChanged", true)
+assert(
+  ns.AiWindow.popupFrame.rows[1].text.textColor.r == 1,
+  "an item whose quality is not cached yet falls back to the normal colour"
+)
+_G.WOWC_TEST_SET_ITEM_INFO(2001, {
+  name = "Bag Item",
+  quality = 3,
+  itemLevel = 15,
+  requiredLevel = 8,
+  equipLoc = "INVTYPE_TRINKET",
+  classId = 7,
+  subClassId = 4,
+})
+input:SetText("@Ba")
+input:Fire("OnTextChanged", true)
+
+input:SetText("@Sim")
+input:Fire("OnTextChanged", true)
+assert(rows[1].text:GetText() == "A Simple Task", "a quest whose name contains the query is offered")
+assert(rows[1].icon:IsShown() and rows[1].icon.atlas == "QuestNormal", "a quest row carries the quest icon")
+assert(ghost:GetText() == "", "a match that does not start with the query has no ghost remainder")
+input:SetText("@Ba")
+input:Fire("OnTextChanged", true)
+
 input:Fire("OnArrowPressed", "DOWN")
 assert(ns.AiWindow.popup.selected == math.min(2, #popup1.items), "Down moves the popup selection forward")
 input:Fire("OnArrowPressed", "UP")
@@ -56,6 +106,7 @@ assert(ns.AiWindow.popup.selected == 1, "Up moves the popup selection back")
 
 input:Fire("OnEscapePressed")
 assert(ns.AiWindow.popup == nil, "Esc closes the popup without touching the typed text")
+assert(ghost:GetText() == "", "Esc clears the ghost text")
 assert(input:GetText() == "@Ba", "Esc leaves the typed text untouched")
 
 input:SetText("@Ba")
@@ -80,12 +131,17 @@ assert(#ns.Transport.sent[1].mentions == 1, "the mentions array carries the pick
 input:SetText("/ai se")
 input:Fire("OnTextChanged", true)
 assert(ns.AiWindow.popup ~= nil, "a matching /ai sub-command opens the popup")
+assert(ghost:GetText() == "ttings", "the sub-command ghost shows the untyped remainder")
+local _, _, _, subGhostX = ghost:GetPoint(1)
+assert(subGhostX == 10 + 6 * 6, "the sub-command ghost starts after '/ai se'")
 input:Fire("OnTabPressed")
 assert(input:GetText() == "/ai settings ", "Tab completes the /ai sub-command ghost text")
 
 ns.Transport.sent = {}
 input:Fire("OnEnterPressed")
 assert(#ns.Transport.sent == 0, "an accepted /ai sub-command routes through Core, not as a plain ask")
+assert(settingsOpenCalls == 1, "an accepted /ai settings typed in the input line opens the settings panel")
+assert(input:GetText() == "", "the input line clears after the routed command")
 
 input:SetText("@zzzzzz-no-match")
 input:Fire("OnTextChanged", true)

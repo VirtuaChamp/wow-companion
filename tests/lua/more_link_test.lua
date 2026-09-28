@@ -28,11 +28,23 @@ local bareLink = lastMessage:match("|H(addon:[^|]+)|h")
 assert(bareLink ~= nil, "the addon hyperlink is present in the reply line")
 assert(bareLink:find("WoWCompanion", 1, true) ~= nil, "the link is namespaced by the addon name")
 
+ns.AiWindow.scrollFrame:Fire("OnHyperlinkClick", "addon:SomeOtherAddon:more:more-1", "[more]", "LeftButton")
+assert(ns.AiWindow.moreBoxEditBox == nil, "another addon's more link does not open this window's box")
+ns.AiWindow.scrollFrame:Fire("OnHyperlinkClick", "addon:SomeOtherAddon:open:default", "[open]", "LeftButton")
+assert(#ns.Transport.sent == 0, "another addon's open link sends nothing")
+
 -- The client strips |H...|h before invoking the widget's OnHyperlinkClick script;
 -- drive that script with the bare link, the payload the client actually produces.
 ns.AiWindow.scrollFrame:Fire("OnHyperlinkClick", bareLink, "[more]", "LeftButton")
 
 assert(ns.AiWindow.moreBoxEditBox ~= nil, "clicking [more] opens the full-text box")
 assert(ns.AiWindow.moreBoxEditBox:GetText() == fullText, "the box shows the full reply text")
+
+local box = ns.AiWindow.moreBoxEditBox
+box:SetText("tampered")
+box:Fire("OnTextChanged", true)
+assert(box:GetText() == fullText, "typing into the full-text box restores the reply text: the box is read-only")
+box:Fire("OnTextChanged", false)
+assert(box:GetText() == fullText, "a programmatic change notification leaves the text as it is")
 
 print("more.link: all assertions passed")

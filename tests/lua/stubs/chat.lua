@@ -233,23 +233,25 @@ function methods:SetColorTexture(r, g, b, a)
   self.color = { r = r, g = g, b = b, a = a }
 end
 
-function methods:SetupMenu(generator)
-  self.menuGenerator = generator
-  local buttons = {}
-  local rootDescription = {}
-  function rootDescription:CreateButton(text, onClick, data)
-    local button = { text = text, onClick = onClick, data = data }
-    table.insert(buttons, button)
-    return button
-  end
-  function rootDescription:CreateTitle(text)
-    table.insert(buttons, { title = text })
-  end
-  function rootDescription:CreateDivider()
-    table.insert(buttons, { divider = true })
-  end
-  generator(self, rootDescription)
-  self.menuButtons = buttons
+function methods:SetNormalAtlas(atlas)
+  self.normalAtlas = atlas
+end
+
+function methods:SetHighlightAtlas(atlas, blendMode)
+  self.highlightAtlas = atlas
+  self.highlightBlendMode = blendMode
+end
+
+function methods:SetAtlas(atlas)
+  self.atlas = atlas
+end
+
+function methods:GetStringWidth()
+  return #(self.text or "") * 6
+end
+
+function methods:GetTextInsets()
+  return 10, 10, 0, 5
 end
 
 function methods:SetMovable(flag)
@@ -286,7 +288,7 @@ end
 
 function methods:StopMovingOrSizing()
   self.moving = false
-  self.sizing = nil
+  self.sizing = false
 end
 
 function methods:SetFrameStrata(strata)
@@ -315,6 +317,79 @@ local function newColor(r, g, b)
   return color
 end
 
+local function newDescription(owner, text, onClick)
+  local description = { text = text, onClick = onClick, children = {} }
+  function description:CreateButton(childText, childOnClick)
+    local child = newDescription(owner, childText, childOnClick)
+    table.insert(self.children, child)
+    return child
+  end
+  function description:Pick()
+    if self.onClick then
+      self.onClick()
+    end
+    owner:CloseMenu()
+  end
+  return description
+end
+
+local function installDropdown(dropdown)
+  function dropdown:SetupMenu(generator)
+    self.menuGenerator = generator
+    local root = newDescription(self, nil, nil)
+    function root:CreateTitle(text)
+      table.insert(self.children, { title = text })
+    end
+    function root:CreateDivider()
+      table.insert(self.children, { divider = true })
+    end
+    generator(self, root)
+    self.menuButtons = root.children
+  end
+  function dropdown:OverrideText(text)
+    if not text then
+      return
+    end
+    self.disableSelectionText = true
+    self:SetText(text)
+  end
+  function dropdown:UpdateToMenuSelections()
+    if self.disableSelectionText then
+      return
+    end
+    self:SetText(self.defaultText)
+  end
+  function dropdown:CloseMenu()
+    self:UpdateToMenuSelections()
+  end
+end
+
+local function installPopupDialog(dialog)
+  dialog.EditBox = newRegion("EditBox")
+  function dialog:GetEditBox()
+    return self.EditBox
+  end
+end
+
+local function installResizeButton(button)
+  function button:Init(target, minWidth, minHeight, maxWidth, maxHeight)
+    self.target = target
+    self.resizeLimits = { minWidth, minHeight, maxWidth, maxHeight }
+  end
+  function button:SetOnResizeStoppedCallback(callback)
+    self.resizeStoppedCallback = callback
+  end
+  button.scripts.OnMouseDown = function(self)
+    self.target:StartSizing("BOTTOMRIGHT")
+  end
+  button.scripts.OnMouseUp = function(self)
+    self.target:StopMovingOrSizing()
+    if self.resizeStoppedCallback then
+      self.resizeStoppedCallback(self.target)
+    end
+  end
+end
+
 _G.CreateFrame = function(frameType, name, parent, template)
   local frame = newRegion(frameType or "Frame")
   frame.name = name
@@ -324,6 +399,12 @@ _G.CreateFrame = function(frameType, name, parent, template)
     frame.TitleContainer = newRegion("Frame")
     frame.TitleContainer.TitleText = newRegion("FontString")
     frame.Inset = newRegion("Frame")
+  end
+  if template == "WowStyle1DropdownTemplate" then
+    installDropdown(frame)
+  end
+  if template == "PanelResizeButtonTemplate" then
+    installResizeButton(frame)
   end
   if name then
     _G[name] = frame
@@ -396,7 +477,8 @@ _G.GameTooltip = {
 _G.StaticPopupDialogs = _G.StaticPopupDialogs or {}
 
 _G.StaticPopup_Show = function(which, textArg1, textArg2, data)
-  local dialog = { editBox = newRegion("EditBox") }
+  local dialog = newRegion("Frame")
+  installPopupDialog(dialog)
   _G.WOWC_TEST_LAST_STATIC_POPUP = {
     which = which,
     textArg1 = textArg1,
@@ -408,19 +490,24 @@ _G.StaticPopup_Show = function(which, textArg1, textArg2, data)
   return dialog
 end
 
-_G.time = os.time
+_G.GetServerTime = function()
+  return _G.WOWC_TEST_SERVER_TIME or os.time()
+end
 
 _G.NORMAL_FONT_COLOR = newColor(1, 1, 1)
 _G.GRAY_FONT_COLOR = newColor(0.5, 0.5, 0.5)
-_G.HIGHLIGHT_FONT_COLOR = newColor(1, 1, 0.6)
 _G.YELLOW_FONT_COLOR = newColor(1, 1, 0)
 
 _G.ITEM_QUALITY_COLORS = {}
 for i = 0, 7 do
-  _G.ITEM_QUALITY_COLORS[i] = newColor(1, 1, 1)
+  local color = newColor(0.1 * i, 0.5, 0.25)
+  _G.ITEM_QUALITY_COLORS[i] = { r = color.r, g = color.g, b = color.b, hex = "|cff", color = color }
 end
 
 _G.GameFontHighlightSmall = _G.GameFontHighlightSmall or {}
 
-_G.SOUNDKIT = { IG_MAINMENU_OPEN = 1, IG_MAINMENU_OPTION_CHECKBOX_ON = 2 }
-_G.PlaySound = function() end
+_G.C_Item = _G.C_Item or {}
+_G.C_Item.GetItemQualityByID = function(itemId)
+  local _, _, quality = _G.C_Item.GetItemInfo(itemId)
+  return quality
+end
