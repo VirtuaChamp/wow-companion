@@ -1,4 +1,5 @@
 export type {
+  Choice,
   CompanionToGame,
   CreateProvider,
   Effort,

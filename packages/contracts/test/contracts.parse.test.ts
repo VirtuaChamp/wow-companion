@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseCompanionToGame, parseGameToCompanion, parseSnapshot } from "../src/parse.ts";
 import type { CompanionToGame, GameToCompanion, Snapshot } from "../src/types.ts";
+import type { Choice } from "../src/index.ts";
+
+const choiceExportCheck: Choice = { provider: "claude", model: "opus" };
+void choiceExportCheck;
 
 const gameToCompanionSamples: GameToCompanion[] = [
   { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 },
@@ -104,7 +108,23 @@ const companionToGameSamples: CompanionToGame[] = [
         current: { model: "" },
       },
     ],
-    defaultProvider: "claude",
+    active: { provider: "claude", model: "opus", effort: "medium" },
+  },
+  {
+    t: "options",
+    providers: [
+      {
+        id: "claude",
+        installed: true,
+        enabled: true,
+        models: ["opus"],
+        efforts: ["medium"],
+        current: { model: "opus", effort: "medium" },
+      },
+    ],
+    active: { provider: "claude", model: "opus", effort: "medium" },
+    chat: { id: "chat-1", provider: "claude", model: "opus" },
+    companionVersion: "0.4.2",
   },
   { t: "progress", id: "ask-1", status: "thinking" },
   { t: "progress", id: "ask-1", status: "tool", detail: "find_npc" },
@@ -130,6 +150,7 @@ const companionToGameSamples: CompanionToGame[] = [
   { t: "error", id: "ask-1", code: "provider_missing", message: "not installed" },
   { t: "error", id: "ask-1", code: "provider_failed", message: "unclassified failure" },
   { t: "error", code: "bad_frame", message: "unparseable" },
+  { t: "error", code: "bad_settings", message: "model not offered" },
 ];
 
 describe("contracts.parse", () => {
@@ -171,6 +192,47 @@ describe("contracts.parse", () => {
       error: "bad_frame",
     });
     expect(parseCompanionToGame({ t: "ack", seq: "5" })).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects a non-string options.companionVersion", () => {
+    expect(
+      parseCompanionToGame({
+        t: "options",
+        providers: [],
+        active: { provider: "claude", model: "opus" },
+        companionVersion: 42,
+      }),
+    ).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects an options message missing active", () => {
+    expect(
+      parseCompanionToGame({
+        t: "options",
+        providers: [],
+      }),
+    ).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects a wrongly typed options.active.effort", () => {
+    expect(
+      parseCompanionToGame({
+        t: "options",
+        providers: [],
+        active: { provider: "claude", model: "opus", effort: "extreme" },
+      }),
+    ).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects an options.chat missing id", () => {
+    expect(
+      parseCompanionToGame({
+        t: "options",
+        providers: [],
+        active: { provider: "claude", model: "opus" },
+        chat: { provider: "claude", model: "opus" },
+      }),
+    ).toEqual({ ok: false, error: "bad_frame" });
   });
 
   it("rejects an extra unknown t alongside otherwise valid fields", () => {
@@ -325,7 +387,7 @@ describe("contracts.parse", () => {
             current: { model: "opus", effort: "ultra" },
           },
         ],
-        defaultProvider: "claude",
+        active: { provider: "claude", model: "opus" },
       }),
     ).toEqual({ ok: false, error: "bad_frame" });
   });
