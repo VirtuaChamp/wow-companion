@@ -75,7 +75,13 @@ describe("state-store", () => {
     const filePath = path.join(dir, "chats.json");
     await writeChatsState(filePath, sample);
 
-    const updated: ChatsState = { ...sample, activeId: "c2" };
+    const updated: ChatsState = {
+      activeId: "c2",
+      chats: [
+        ...sample.chats,
+        { id: "c2", name: "Second", provider: "codex", unread: 0, lastAt: 1001, history: [] },
+      ],
+    };
     await writeChatsState(filePath, updated);
 
     const read = await readChatsState(filePath);
@@ -134,5 +140,36 @@ describe("state-store", () => {
 
     const result = await readChatsState(filePath);
     expect(result).toEqual({ ok: false, error: "parse_failed" });
+  });
+
+  it("an activeId that names no stored chat is rejected as parse_failed", async () => {
+    const filePath = path.join(dir, "chats.json");
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        activeId: "ghost",
+        chats: [{ id: "c1", name: "A", provider: "claude", unread: 0, lastAt: 1000, history: [] }],
+      }),
+      "utf8",
+    );
+
+    expect(await readChatsState(filePath)).toEqual({ ok: false, error: "parse_failed" });
+  });
+
+  it("a non-empty activeId with no chats is rejected as parse_failed", async () => {
+    const filePath = path.join(dir, "chats.json");
+    await writeFile(filePath, JSON.stringify({ activeId: "c1", chats: [] }), "utf8");
+
+    expect(await readChatsState(filePath)).toEqual({ ok: false, error: "parse_failed" });
+  });
+
+  it("an empty state with an empty activeId reads back", async () => {
+    const filePath = path.join(dir, "chats.json");
+    await writeFile(filePath, JSON.stringify({ activeId: "", chats: [] }), "utf8");
+
+    expect(await readChatsState(filePath)).toEqual({
+      ok: true,
+      value: { activeId: "", chats: [] },
+    });
   });
 });

@@ -83,6 +83,8 @@ function parseChatsState(value: unknown): ChatsState | undefined {
     seenIds.add(chat.id);
     chats.push(chat);
   }
+  const activeNamesAChat = chats.some((chat) => chat.id === value.activeId);
+  if (chats.length === 0 ? value.activeId !== "" : !activeNamesAChat) return undefined;
   return { activeId: value.activeId, chats };
 }
 

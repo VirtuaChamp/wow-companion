@@ -51,6 +51,37 @@ export function settingsApplyErrorMessage(
   }
 }
 
+export type SettingsRefusal = { code: "bad_settings"; message: string };
+
+export function settingsRefusal(
+  error: SettingsApplyError,
+  providerId: ProviderId,
+): SettingsRefusal {
+  return { code: "bad_settings", message: settingsApplyErrorMessage(error, providerId) };
+}
+
+export type OptionChoices = {
+  active: ProviderChoice;
+  chat?: { id: string } & ProviderChoice;
+};
+
+export function optionChoices(
+  settings: Settings,
+  activeChat: { id: string; provider: ProviderId } | undefined,
+): OptionChoices {
+  const own = activeChat === undefined ? undefined : settings.perChat[activeChat.id];
+  if (activeChat === undefined || own === undefined) return { active: settings.global };
+  return {
+    active: settings.global,
+    chat: {
+      id: activeChat.id,
+      provider: activeChat.provider,
+      model: own.model,
+      ...(own.effort === undefined ? {} : { effort: own.effort }),
+    },
+  };
+}
+
 function toGlobalChoice(msg: SettingsMessage): ProviderChoice {
   return msg.effort === undefined
     ? { provider: msg.provider, model: msg.model }

@@ -12,6 +12,7 @@ import {
   resetChat,
   setChatProvider,
 } from "../../src/core/chats.ts";
+import type { ProviderError } from "@wow-companion/contracts";
 import { apply } from "../../src/core/settings.ts";
 import type { ProviderOption, Settings } from "../../src/core/settings.ts";
 
@@ -512,5 +513,150 @@ describe("chats.lifecycle", () => {
       const reply = completedAsk.value.effects.find((e) => e.t === "reply");
       expect(reply).toMatchObject({ provider: "codex" });
     }
+  });
+});
+
+describe("chats.providerErrors", () => {
+  const providerErrors: readonly ProviderError[] = [
+    "provider_missing",
+    "provider_auth",
+    "provider_disabled",
+    "provider_failed",
+    "session_unknown",
+    "timeout",
+    "cancelled",
+  ];
+
+  it.each(providerErrors)(
+    "failAsk(%s) ends the ask with that code and a non-empty message",
+    (error) => {
+      const begun = beginAsk(
+        created("c1", "Quests", "claude", 1000).state,
+        "c1",
+        "ask-1",
+        "hi",
+        1001,
+      );
+      if (!begun.ok) throw new Error("expected ok");
+
+      const failed = failAsk(begun.value.state, "c1", "ask-1", error, 1002);
+
+      expect(failed.ok).toBe(true);
+      if (!failed.ok) return;
+      const terminal = failed.value.effects.find((e) => e.t === "error");
+      expect(terminal).toMatchObject({ t: "error", id: "ask-1", code: error });
+      expect(terminal?.t === "error" && terminal.message.length > 0).toBe(true);
+      expect(failed.value.state.chats[0]?.runningAsk).toBeUndefined();
+    },
+  );
+
+  it("provider_failed is worded as a provider failure", () => {
+    const begun = beginAsk(
+      created("c1", "Quests", "claude", 1000).state,
+      "c1",
+      "ask-1",
+      "hi",
+      1001,
+    );
+    if (!begun.ok) throw new Error("expected ok");
+
+    const failed = failAsk(begun.value.state, "c1", "ask-1", "provider_failed", 1002);
+
+    expect(failed.ok && failed.value.effects).toContainEqual({
+      t: "error",
+      id: "ask-1",
+      code: "provider_failed",
+      message: "provider failed",
+    });
+  });
+
+  it("stamps lastAt and history lines in the injected whole seconds", () => {
+    const begun = beginAsk(
+      created("c1", "Quests", "claude", 1_700_000_000).state,
+      "c1",
+      "ask-1",
+      "hi",
+      1_700_000_005,
+    );
+    if (!begun.ok) throw new Error("expected ok");
+
+    expect(begun.value.state.chats[0]?.lastAt).toBe(1_700_000_005);
+    expect(begun.value.state.chats[0]?.history[0]?.at).toBe(1_700_000_005);
+  });
+});
+
+describe("chats.crossCheck", () => {
+  function withSession(provider: "claude" | "codex" | "cursor") {
+    const begun = beginAsk(
+      created("c1", "Quests", provider, 1000).state,
+      "c1",
+      "ask-1",
+      "hi",
+      1001,
+    );
+    if (!begun.ok) throw new Error("expected ok");
+    const done = completeAsk(
+      begun.value.state,
+      "c1",
+      "ask-1",
+      { sessionId: "s1", text: "yo" },
+      1002,
+    );
+    if (!done.ok) throw new Error("expected ok");
+    return done.value.state;
+  }
+
+  it("setChatProvider to the provider the chat already has keeps state and sessionId unchanged", () => {
+    const state = withSession("claude");
+
+    const same = setChatProvider(state, "c1", "claude");
+
+    expect(same.ok && same.value.state).toEqual(state);
+    expect(same.ok && same.value.state.chats[0]?.sessionId).toBe("s1");
+    expect(same.ok && same.value.effects).toEqual([]);
+  });
+
+  it("setChatProvider to another provider still drops the session", () => {
+    const changed = setChatProvider(withSession("claude"), "c1", "codex");
+
+    expect(changed.ok && changed.value.state.chats[0]?.sessionId).toBeUndefined();
+    expect(changed.ok && changed.value.state.chats[0]?.provider).toBe("codex");
+  });
+
+  it("a session_unknown result on a cancelling ask never retries: it ends as cancelled and releases the lock", () => {
+    const begun = beginAsk(withSession("claude"), "c1", "ask-2", "again", 1003);
+    if (!begun.ok) throw new Error("expected ok");
+    const cancelled = cancelChat(begun.value.state, "c1");
+    if (!cancelled.ok) throw new Error("expected ok");
+
+    const failed = failAsk(cancelled.value.state, "c1", "ask-2", "session_unknown", 1004);
+
+    expect(failed.ok).toBe(true);
+    if (!failed.ok) return;
+    expect(failed.value.retry).toBeUndefined();
+    expect(failed.value.state.chats[0]?.runningAsk).toBeUndefined();
+    expect(failed.value.state.chats[0]?.unread).toBe(0);
+    expect(failed.value.effects.filter((e) => e.t === "error")).toEqual([
+      { t: "error", id: "ask-2", code: "cancelled", message: "cancelled" },
+    ]);
+  });
+
+  it("the history message carries only who, text and at, even for the session-expired notice", () => {
+    const begun = beginAsk(withSession("claude"), "c1", "ask-2", "again", 1003);
+    if (!begun.ok) throw new Error("expected ok");
+    const failed = failAsk(begun.value.state, "c1", "ask-2", "session_unknown", 1004);
+    if (!failed.ok) throw new Error("expected ok");
+
+    const history = failed.value.effects.find((e) => e.t === "history");
+
+    expect(history?.t === "history" && history.lines.at(-1)).toEqual({
+      who: "claude",
+      text: "session expired, starting a new one",
+      at: 1004,
+    });
+    for (const line of history?.t === "history" ? history.lines : []) {
+      expect(Object.keys(line).sort()).toEqual(["at", "text", "who"]);
+    }
+    expect(failed.value.state.chats[0]?.history.at(-1)?.kind).toBe("notice");
   });
 });

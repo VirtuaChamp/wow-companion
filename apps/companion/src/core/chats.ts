@@ -1,9 +1,11 @@
 import type { CompanionToGame, ProviderError, ProviderId, Result } from "@wow-companion/contracts";
 
+export type EpochSeconds = number;
+
 export type HistoryLine = {
   who: "you" | ProviderId;
   text: string;
-  at: number;
+  at: EpochSeconds;
   kind?: "notice";
 };
 
@@ -16,7 +18,7 @@ export type ChatState = {
   sessionId?: string;
   runningAsk?: RunningAsk;
   unread: number;
-  lastAt: number;
+  lastAt: EpochSeconds;
   history: readonly HistoryLine[];
 };
 
@@ -91,7 +93,11 @@ function toChatsMessage(state: ChatsState): CompanionToGame {
 }
 
 function toHistoryMessage(chat: ChatState): CompanionToGame {
-  return { t: "history", chat: chat.id, lines: [...chat.history] };
+  return {
+    t: "history",
+    chat: chat.id,
+    lines: chat.history.map((line) => ({ who: line.who, text: line.text, at: line.at })),
+  };
 }
 
 function summarizeHistory(history: readonly HistoryLine[]): string {
@@ -128,6 +134,8 @@ function providerErrorMessage(error: ProviderError): string {
       return "provider authentication failed";
     case "provider_disabled":
       return "provider is disabled";
+    case "provider_failed":
+      return "provider failed";
     case "timeout":
       return "provider timed out";
     case "cancelled":
@@ -140,7 +148,7 @@ export function createChat(
   id: string,
   name: string,
   provider: ProviderId,
-  now: number,
+  now: EpochSeconds,
 ): Result<ChatsOutcome, ChatsError> {
   if (findChat(state, id) !== undefined) return { ok: false, error: "exists" };
   const chat: ChatState = { id, name, provider, unread: 0, lastAt: now, history: [] };
@@ -159,6 +167,7 @@ export function setChatProvider(
   const chat = findChat(state, id);
   if (chat === undefined) return { ok: false, error: "not_found" };
   if (chat.runningAsk !== undefined) return { ok: false, error: "busy" };
+  if (chat.provider === provider) return { ok: true, value: { state, effects: [] } };
   const updated = clearSessionId({ ...chat, provider });
   const nextState = replaceChat(state, id, () => updated);
   return { ok: true, value: { state: nextState, effects: [toChatsMessage(nextState)] } };
@@ -239,7 +248,7 @@ export function beginAsk(
   chatId: string,
   askId: string,
   text: string,
-  now: number,
+  now: EpochSeconds,
 ): Result<BeginAskOutcome, ChatsError> {
   const chat = findChat(state, chatId);
   if (chat === undefined) return { ok: false, error: "not_found" };
@@ -265,7 +274,7 @@ export function completeAsk(
   chatId: string,
   askId: string,
   outcome: { sessionId: string; text: string },
-  now: number,
+  now: EpochSeconds,
 ): Result<ChatsOutcome, ChatsError> {
   const chat = findChat(state, chatId);
   if (chat === undefined || chat.runningAsk?.id !== askId) return { ok: false, error: "not_found" };
@@ -298,11 +307,12 @@ export function failAsk(
   chatId: string,
   askId: string,
   error: ProviderError,
-  now: number,
+  now: EpochSeconds,
 ): Result<FailAskOutcome, ChatsError> {
   const chat = findChat(state, chatId);
   if (chat === undefined || chat.runningAsk?.id !== askId) return { ok: false, error: "not_found" };
-  if (error === "session_unknown" && chat.sessionId !== undefined) {
+  const cancelling = chat.runningAsk.cancelling === true;
+  if (error === "session_unknown" && chat.sessionId !== undefined && !cancelling) {
     const transcriptSummary = summarizeHistory(chat.history.slice(0, -1));
     const notice: HistoryLine = {
       who: chat.provider,
@@ -325,8 +335,8 @@ export function failAsk(
       },
     };
   }
-  const cancelling = chat.runningAsk?.cancelling === true;
-  const unreadDelta = error === "cancelled" || cancelling ? 0 : chatId !== state.activeId ? 1 : 0;
+  const terminal: ProviderError = cancelling ? "cancelled" : error;
+  const unreadDelta = terminal === "cancelled" ? 0 : chatId !== state.activeId ? 1 : 0;
   const nextState = replaceChat(state, chatId, (c) =>
     clearRunningAsk({ ...c, unread: c.unread + unreadDelta, lastAt: now }),
   );
@@ -336,7 +346,7 @@ export function failAsk(
       state: nextState,
       effects: [
         toChatsMessage(nextState),
-        { t: "error", id: askId, code: error, message: providerErrorMessage(error) },
+        { t: "error", id: askId, code: terminal, message: providerErrorMessage(terminal) },
       ],
     },
   };
