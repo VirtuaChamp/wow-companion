@@ -7,7 +7,7 @@ const choiceExportCheck: Choice = { provider: "claude", model: "opus" };
 void choiceExportCheck;
 
 const gameToCompanionSamples: GameToCompanion[] = [
-  { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001 },
+  { t: "hello", v: 1, build: "1.60.1.70009", iface: 16001, session: "sess-1", slot: 1 },
   {
     t: "state",
     seq: 1,
@@ -187,11 +187,98 @@ describe("contracts.parse", () => {
   });
 
   it("rejects a wrongly typed field", () => {
-    expect(parseGameToCompanion({ t: "hello", v: 1, build: 123, iface: 16001 })).toEqual({
+    expect(
+      parseGameToCompanion({
+        t: "hello",
+        v: 1,
+        build: 123,
+        iface: 16001,
+        session: "sess-1",
+        slot: 1,
+      }),
+    ).toEqual({
       ok: false,
       error: "bad_frame",
     });
     expect(parseCompanionToGame({ t: "ack", seq: "5" })).toEqual({ ok: false, error: "bad_frame" });
+  });
+
+  it("rejects hello without a session token", () => {
+    expect(
+      parseGameToCompanion({ t: "hello", v: 1, build: "1.60.1", iface: 16001, slot: 1 }),
+    ).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(
+      parseGameToCompanion({
+        t: "hello",
+        v: 1,
+        build: "1.60.1",
+        iface: 16001,
+        session: 7,
+        slot: 1,
+      }),
+    ).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+  });
+
+  it("accepts hello with again true and rejects any other again value", () => {
+    const base = { t: "hello", v: 1, build: "1.60.1", iface: 16001, session: "sess-1", slot: 3 };
+    expect(parseGameToCompanion({ ...base, again: true })).toEqual({
+      ok: true,
+      value: { ...base, again: true },
+    });
+    expect(parseGameToCompanion(base)).toEqual({ ok: true, value: base });
+    expect(parseGameToCompanion({ ...base, again: false })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(parseGameToCompanion({ ...base, again: "yes" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+  });
+
+  it("bounds the hello session token to 17 plain characters", () => {
+    const base = { t: "hello", v: 1, build: "1.60.1", iface: 16001, slot: 1 };
+    expect(parseGameToCompanion({ ...base, session: "0000002a-0000002b" }).ok).toBe(true);
+    expect(parseGameToCompanion({ ...base, session: "0000002a-0000002b0" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(parseGameToCompanion({ ...base, session: "" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(parseGameToCompanion({ ...base, session: 'a"b' })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+  });
+
+  it("rejects hello without a slot number", () => {
+    expect(
+      parseGameToCompanion({ t: "hello", v: 1, build: "1.60.1", iface: 16001, session: "sess-1" }),
+    ).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(
+      parseGameToCompanion({
+        t: "hello",
+        v: 1,
+        build: "1.60.1",
+        iface: 16001,
+        session: "sess-1",
+        slot: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
   });
 
   it("rejects a non-string options.companionVersion", () => {
@@ -257,11 +344,29 @@ describe("contracts.parse", () => {
   });
 
   it("rejects hello when v is not exactly 1", () => {
-    expect(parseGameToCompanion({ t: "hello", v: 2, build: "1.60.1", iface: 16001 })).toEqual({
+    expect(
+      parseGameToCompanion({
+        t: "hello",
+        v: 2,
+        build: "1.60.1",
+        iface: 16001,
+        session: "sess-1",
+        slot: 1,
+      }),
+    ).toEqual({
       ok: false,
       error: "bad_frame",
     });
-    expect(parseGameToCompanion({ t: "hello", v: "1", build: "1.60.1", iface: 16001 })).toEqual({
+    expect(
+      parseGameToCompanion({
+        t: "hello",
+        v: "1",
+        build: "1.60.1",
+        iface: 16001,
+        session: "sess-1",
+        slot: 1,
+      }),
+    ).toEqual({
       ok: false,
       error: "bad_frame",
     });
