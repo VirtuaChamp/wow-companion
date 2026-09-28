@@ -100,7 +100,7 @@ type Upgrade = { slot: number; current?: ItemDetail; candidate: ItemDetail;
   source: { kind: "npc_drop" | "object_drop" | "quest_reward" | "vendor"; entityId: number }; delta: Record<string, number> };
 type McpLaunch = { command: string; args: string[]; env: Record<string, string> };
 ```
-`state.delta: Partial<Snapshot>` is shallow: a key present replaces that whole field; no deep merge. `character.name` is transport-only: never logged, never in `/ai report` (AC 20). `equipLoc` and `stats` are what the client's `C_Item` call returns, named in `docs/client-facts.md` (AC 6).
+`state.delta: Partial<Snapshot>` is shallow: a key present replaces that whole field; no deep merge. A state still queued in the addon when a newer one is sent is merged into it (newer keys win, keys only the older one carries are kept), never discarded; if the merged payload is too large both stay queued. The addon sends a full snapshot after every hello ack and every 60 s; a companion that adopted a session on its own restart treats state as not live (GET /state answers not_connected) until the next full snapshot (PM decision 2026-09-28). `character.name` is transport-only: never logged, never in `/ai report` (AC 20). `equipLoc` and `stats` are what the client's `C_Item` call returns, named in `docs/client-facts.md` (AC 6).
 
 **GameLink (companion transport port).** The companion core reaches the game only through this interface, implemented by slice 13 (game-link), typed in `packages/contracts` by slice 03:
 ```ts
