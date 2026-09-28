@@ -147,7 +147,7 @@ export type ProviderConfig = {
 };
 export interface Provider {
   id: ProviderId;
-  describe(): Promise<{
+  describe(signal?: AbortSignal): Promise<{
     installed: boolean;
     enabled: boolean;
     reason?: string;

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ProviderConfig, ProviderEvent } from "@wow-companion/contracts";
 import { createClaudeWith } from "../../src/adapters/providers/claude.ts";
 import {
@@ -134,6 +134,56 @@ describe("provider.claude", () => {
     const info = await provider.describe();
     expect(info.installed).toBe(true);
     expect(info.enabled).toBe(false);
+  });
+
+  function countingQuery(supportedModels: () => Promise<ModelInfo[]>) {
+    const state = { closes: 0 };
+    const queryFn = () => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<SDKMessage> => ({
+        next: () => Promise.resolve({ value: undefined, done: true }),
+      }),
+      supportedModels,
+      close() {
+        state.closes += 1;
+      },
+    });
+    return { state, queryFn };
+  }
+
+  test("provider.claude.describe closes the query when the caller's signal fires while supportedModels hangs", async () => {
+    const { state, queryFn } = countingQuery(() => new Promise<ModelInfo[]>(() => {}));
+    const provider = createClaudeWith(queryFn)(baseConfig());
+    const controller = new AbortController();
+
+    const pending = provider.describe(controller.signal);
+    controller.abort();
+    const info = await pending;
+
+    expect(info.enabled).toBe(false);
+    expect(info.reason).toContain("cancelled");
+    expect(state.closes).toBeGreaterThanOrEqual(1);
+  });
+
+  test("provider.claude.describe closes the query on success and on error", async () => {
+    const ok = countingQuery(async () => [{ value: "m", displayName: "m", description: "m" }]);
+    await createClaudeWith(ok.queryFn)(baseConfig()).describe();
+    expect(ok.state.closes).toBe(1);
+
+    const failing = countingQuery(() => Promise.reject(new Error("boom")));
+    const info = await createClaudeWith(failing.queryFn)(baseConfig()).describe();
+    expect(info.enabled).toBe(false);
+    expect(failing.state.closes).toBe(1);
+  });
+
+  test("provider.claude.describe does not start work when the signal is already aborted", async () => {
+    const { state, queryFn } = countingQuery(() => new Promise<ModelInfo[]>(() => {}));
+    const controller = new AbortController();
+    controller.abort();
+
+    const info = await createClaudeWith(queryFn)(baseConfig()).describe(controller.signal);
+
+    expect(info.enabled).toBe(false);
+    expect(state.closes).toBeGreaterThanOrEqual(1);
   });
 
   test("provider.claude.run missing binary", async () => {

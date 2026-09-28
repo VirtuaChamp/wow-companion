@@ -9,21 +9,32 @@ export const PROVIDER_ORDER: readonly ProviderId[] = ["claude", "codex", "cursor
 export type DescribeService = {
   cached(): Descriptions;
   refresh(): Promise<Descriptions>;
+  ensureFresh(maxAgeMs: number): Promise<Descriptions>;
 };
 
-function bounded<T>(work: Promise<T>, timeoutMs: number, onTimeout: T): Promise<T> {
+function bounded<T>(
+  work: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  onTimeout: T,
+): Promise<T> {
+  const controller = new AbortController();
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(onTimeout), timeoutMs);
-    work.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(onTimeout);
-      },
-    );
+    const timer = setTimeout(() => {
+      controller.abort();
+      resolve(onTimeout);
+    }, timeoutMs);
+    Promise.resolve()
+      .then(() => work(controller.signal))
+      .then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        () => {
+          clearTimeout(timer);
+          resolve(onTimeout);
+        },
+      );
   });
 }
 
@@ -58,6 +69,7 @@ export function createDescribeService(input: {
     ]),
   );
   let inflight: Promise<Descriptions> | undefined;
+  let refreshedAt: number | undefined;
 
   async function describeOne(id: ProviderId): Promise<[ProviderId, Description]> {
     const provider = input.providers.get(id);
@@ -65,7 +77,7 @@ export function createDescribeService(input: {
       provider === undefined
         ? unavailable(config, id, "provider adapter not available")
         : await bounded(
-            Promise.resolve().then(() => provider.describe()),
+            (signal) => provider.describe(signal),
             input.timeoutMs,
             unavailable(config, id, "provider check timed out or failed"),
           );
@@ -74,19 +86,27 @@ export function createDescribeService(input: {
 
   async function run(): Promise<Descriptions> {
     if (input.before !== undefined) {
-      await bounded(input.before(), input.timeoutMs, undefined);
+      await bounded(() => input.before?.() ?? Promise.resolve(), input.timeoutMs, undefined);
     }
     latest = new Map(await Promise.all(PROVIDER_ORDER.map(describeOne)));
+    refreshedAt = Date.now();
     return latest;
+  }
+
+  function refresh(): Promise<Descriptions> {
+    inflight ??= run().finally(() => {
+      inflight = undefined;
+    });
+    return inflight;
   }
 
   return {
     cached: () => latest,
-    refresh() {
-      inflight ??= run().finally(() => {
-        inflight = undefined;
-      });
-      return inflight;
+    refresh,
+    ensureFresh(maxAgeMs) {
+      return refreshedAt !== undefined && Date.now() - refreshedAt <= maxAgeMs
+        ? Promise.resolve(latest)
+        : refresh();
     },
   };
 }

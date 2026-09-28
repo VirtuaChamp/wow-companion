@@ -21,6 +21,7 @@ export const DEFAULT_CHAT_NAME = "Default";
 const DEFAULT_ITEM_TIMEOUT_MS = 10_000;
 const DEFAULT_DESCRIBE_TIMEOUT_MS = 10_000;
 const DEFAULT_GAME_WRITE_INTERVAL_MS = 1000;
+const DEFAULT_DESCRIBE_MAX_AGE_MS = 60_000;
 
 export type Store<T> = { save(value: T): Promise<void> };
 
@@ -41,6 +42,7 @@ export type DaemonDeps = {
   itemTimeoutMs?: number;
   timeoutGraceMs?: number;
   describeTimeoutMs?: number;
+  describeMaxAgeMs?: number;
   gameWriteIntervalMs?: number;
   beforeDescribe?: () => Promise<void>;
   log?: (line: string) => void;
@@ -57,6 +59,7 @@ type DaemonState = {
   settings: Settings;
   game: Partial<Snapshot>;
   helloSeen: boolean;
+  refreshed: Set<keyof Snapshot>;
 };
 
 export type DaemonContext = {
@@ -68,6 +71,7 @@ export type DaemonContext = {
   readonly log: (line: string) => void;
   readonly runner: Runner;
   readonly describe: DescribeService;
+  readonly describeMaxAgeMs: number;
   readonly items: ItemsBroker;
   readonly out: Sender;
   readonly persister: Persister;
@@ -100,6 +104,7 @@ export function createContext(deps: DaemonDeps): DaemonContext {
     settings: deps.initialSettings,
     game: deps.initialGame,
     helloSeen: false,
+    refreshed: new Set(),
   };
   if (state.chats.chats.length === 0) {
     const seeded = createChat(
@@ -130,6 +135,7 @@ export function createContext(deps: DaemonDeps): DaemonContext {
       ...(deps.timeoutGraceMs === undefined ? {} : { timeoutGraceMs: deps.timeoutGraceMs }),
       ...(deps.mintRunId === undefined ? {} : { mintRunId: deps.mintRunId }),
     }),
+    describeMaxAgeMs: deps.describeMaxAgeMs ?? DEFAULT_DESCRIBE_MAX_AGE_MS,
     describe: createDescribeService({
       config: deps.config,
       providers: deps.providers,

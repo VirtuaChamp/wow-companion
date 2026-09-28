@@ -124,14 +124,39 @@ describe("daemon.hello", () => {
     expect(harness.daemon.api.getState()).toEqual({ ok: true, value: makeSnapshot() });
   });
 
-  it("serves the last known snapshot after an again hello following a companion restart", async () => {
+  it("treats state as not live after adopting a session on a restart, until every key has been refreshed", async () => {
     const harness = startDaemon({ initialGame: makeSnapshot() });
     cleanups.push(harness.stop);
 
     expect(harness.daemon.api.getState()).toEqual({ ok: false, error: "not_connected" });
     harness.link.push(hello(true));
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(harness.daemon.api.getState()).toEqual({ ok: true, value: makeSnapshot() });
+    expect(harness.daemon.api.getState()).toEqual({ ok: false, error: "not_connected" });
+
+    harness.link.push({ t: "state", seq: 1, delta: { money: 900 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.daemon.api.getState()).toEqual({ ok: false, error: "not_connected" });
+
+    const { money: _money, ...rest } = makeSnapshot();
+    void _money;
+    harness.link.push({ t: "state", seq: 2, delta: rest });
+    await waitFor(() => harness.daemon.api.getState().ok);
+    expect(harness.daemon.api.getState()).toEqual({
+      ok: true,
+      value: { ...makeSnapshot(), money: 900 },
+    });
+  });
+
+  it("serves state again after a full snapshot following the adoption, and drops it on a new session", async () => {
+    const harness = startDaemon({ initialGame: makeSnapshot() });
+    cleanups.push(harness.stop);
+    harness.link.push(hello(true));
+    harness.link.push({ t: "state", seq: 1, delta: makeSnapshot() });
+    await waitFor(() => harness.daemon.api.getState().ok);
+
+    harness.link.push(hello());
+    await waitForSent(harness.link, 3);
+    expect(harness.daemon.api.getState()).toEqual({ ok: false, error: "not_connected" });
   });
 
   it("coalesces game.json writes: a burst of deltas is written once, as the latest merged snapshot", async () => {

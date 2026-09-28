@@ -214,27 +214,8 @@ do
   s.runTimers(2)
   assert(#s.timers() >= 1, "position checks re-arm")
   for _, entry in ipairs(s.timers()) do
-    assert(entry.seconds == 0.5 or entry.seconds == 2, "only the coalescing and position timers exist")
+    assert(entry.seconds == 0.5 or entry.seconds == 2 or entry.seconds == 60, "only the coalescing, position and resync timers exist")
   end
-end
-
-do
-  local busy = true
-  local s = newSession(function(_, index)
-    if busy then
-      return nil, "busy"
-    end
-    return index
-  end)
-  s.ack()
-  assert(#s.sent == 1, "the busy attempt was made")
-  busy = false
-  s.runTimers(0.5)
-  assert(#s.sent == 2, "a busy send is retried on the next coalescing tick")
-  assert(s.sent[2].delta.character ~= nil, "the retry still carries the full snapshot")
-  s.fire("PLAYER_MONEY")
-  s.runTimers(0.5)
-  assert(#s.sent == 2, "once delivered, an unchanged snapshot is not resent")
 end
 
 do
@@ -269,6 +250,128 @@ do
   second.ack()
   assert(#second.sent == 1, "a new session sends a full snapshot again")
   assert(second.sent[1].delta.character ~= nil, "the new session's snapshot is complete")
+end
+
+do
+  local s = newSession()
+  s.ack()
+  assert(#s.sent == 1, "full snapshot sent")
+  s.set("money", 7)
+  assert(s.runTimers(60) == 1, "a full snapshot resync runs on a 60 second timer")
+  s.runTimers(0.5)
+  assert(#s.sent == 2, "the resync sends a snapshot even when nothing changed since the last send")
+  for _, key in ipairs(SNAPSHOT_KEYS) do
+    assert(s.sent[2].delta[key] ~= nil, "the resync carries every key: " .. key)
+  end
+  assert(s.runTimers(60) == 1, "the resync timer re-arms itself")
+end
+
+do
+  local s = newSession()
+  s.set("character", nil)
+  s.ack()
+  assert(#s.sent == 0, "an incomplete first snapshot is not sent")
+  s.set("character", freshSnapshot().character)
+  s.runTimers(2)
+  s.runTimers(0.5)
+  assert(#s.sent == 1, "the first snapshot goes out once every key is present")
+  for _, key in ipairs(SNAPSHOT_KEYS) do
+    assert(s.sent[1].delta[key] ~= nil, "the first snapshot carries every key: " .. key)
+  end
+end
+
+do
+  local ns = {}
+  local painted = {}
+  ns.Codec = {
+    encode = function(tbl, seq)
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function(frame)
+      table.insert(painted, frame)
+    end,
+  }
+  loadStateModule(ns)
+  local current = freshSnapshot()
+  ns.State.snapshot = function()
+    local copy = {}
+    for key, value in pairs(current) do
+      copy[key] = value
+    end
+    return copy
+  end
+  _G.WOWC_TEST_TIMER_CALLBACKS = {}
+  local inboxChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  inboxChunk("WoWCompanion", ns)
+  local senderChunk = assert(loadfile("addon/WoWCompanion/StateSender.lua"))
+  local frameCreator = _G.CreateFrame
+  _G.CreateFrame = function()
+    return { RegisterEvent = function() end, SetScript = function() end }
+  end
+  senderChunk("WoWCompanion", ns)
+  _G.CreateFrame = frameCreator
+
+  local function runTimersFor(seconds)
+    local pending = _G.WOWC_TEST_TIMER_CALLBACKS
+    _G.WOWC_TEST_TIMER_CALLBACKS = {}
+    for _, entry in ipairs(pending) do
+      if entry.seconds == seconds then
+        entry.callback()
+      else
+        table.insert(_G.WOWC_TEST_TIMER_CALLBACKS, entry)
+      end
+    end
+  end
+
+  local helloSeq = painted[1].seq
+  WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = helloSeq } })
+  assert(painted[#painted].tbl.t == "state", "the full snapshot is painted right after the hello ack")
+  runTimersFor(0.25)
+  local askSeq = ns.Transport.send({ t = "ask", id = "a", chat = "c", text = "x", mentions = {} })
+  assert(askSeq ~= nil, "an ask is held as the current entry")
+
+  current.bags = { { bag = 0, slot = 1, itemId = 5, count = 1 } }
+  ns.StateSender.schedule()
+  runTimersFor(0.5)
+  current.position = { uiMapId = 85, zone = "Z", subzone = "", x = 9, y = 9 }
+  ns.StateSender.schedule()
+  runTimersFor(0.5)
+
+  WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = askSeq } })
+  local reached = {}
+  for _, frame in ipairs(painted) do
+    if frame.tbl.t == "state" and frame.tbl.delta then
+      for key in pairs(frame.tbl.delta) do
+        reached[key] = true
+      end
+    end
+  end
+  local last = painted[#painted]
+  assert(last.tbl.t == "state", "the queued state is painted after the ask is acked")
+  assert(last.tbl.delta.bags ~= nil and last.tbl.delta.position ~= nil, "two deltas queued behind an ask both reach the painted frames")
+  assert(reached.bags and reached.position, "no key is lost")
+end
+
+do
+  local ns = {}
+  local sent = {}
+  ns.Transport = {
+    send = function(tbl)
+      table.insert(sent, tbl)
+      return #sent
+    end,
+    onHelloAcked = function() end,
+    onMessage = function() end,
+  }
+  loadStateModule(ns)
+  _G.UnitFactionGroup = function()
+    return nil
+  end
+  local snapshot = ns.State.snapshot()
+  assert(snapshot.character == nil, "the real snapshot omits character while the faction is unknown, so the sender must wait for it")
 end
 
 _G.print = realPrint

@@ -177,13 +177,26 @@ end
 
 do
   local before = #paintCalls
-  ns.Transport.send({ t = "state", seq = 1 })
-  local afterFirst = #paintCalls
-  ns.Transport.send({ t = "state", seq = 2 })
-  tickRepaint()
-  tickRepaint()
-  local total = #paintCalls - before
-  assert(total <= afterFirst - before + 1, "a fresh state supersedes a still-queued state instead of stacking")
+  local askSeq = ns.Transport.send({ t = "ask", id = "hold-current", chat = "c", text = "x", mentions = {} })
+  assert(askSeq ~= nil, "an ask is held as the current entry")
+  ns.Transport.send({ t = "state", seq = 1, delta = { bags = { 1 }, money = 1 } })
+  ns.Transport.send({ t = "state", seq = 2, delta = { position = { 2 }, money = 2 } })
+  WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = askSeq } })
+  local painted = paintCalls[#paintCalls]
+  assert(painted.tbl.t == "state", "the queued state is painted once the ask is acked")
+  assert(painted.tbl.delta.bags ~= nil, "a key only the older state carries is kept")
+  assert(painted.tbl.delta.position ~= nil, "a key only the newer state carries is kept")
+  assert(painted.tbl.delta.money == 2, "on a shared key the newer value wins")
+  for _ = 1, 3 do
+    tickRepaint()
+  end
+  local stateFrames = 0
+  for index = before + 1, #paintCalls do
+    if paintCalls[index].tbl.t == "state" then
+      stateFrames = stateFrames + 1
+    end
+  end
+  assert(stateFrames >= 1, "the merged state is painted")
 end
 
 do
@@ -503,6 +516,56 @@ do
     lastPainted.tbl.t == "state" and lastPainted.tbl.seq == 2,
     "a refused state does not drop the earlier valid queued state"
   )
+end
+
+do
+  local paintCallsM = {}
+  local fakeCodecM = {
+    encode = function(tbl, seq)
+      if tbl.t == "hello" then
+        return { { seq = seq, tbl = tbl } }, nil
+      end
+      local keys = 0
+      for _ in pairs(tbl.delta or {}) do
+        keys = keys + 1
+      end
+      if keys > 1 then
+        return nil, "too_large"
+      end
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function(cells)
+      table.insert(paintCallsM, cells)
+    end,
+  }
+  local nsM = {}
+  nsM.Codec = fakeCodecM
+  local chunkM = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  chunkM("WoWCompanion", nsM)
+  local helloSeqM = paintCallsM[1].seq
+  WoWCompanion_Deliver(nsM.Transport.session(), { { t = "ack", seq = helloSeqM } })
+  local holdSeq = nsM.Transport.send({ t = "cmd", chat = "c", name = "new" })
+  nsM.Transport.send({ t = "state", seq = 1, delta = { bags = { 1 } } })
+  nsM.Transport.send({ t = "state", seq = 2, delta = { position = { 2 } } })
+  WoWCompanion_Deliver(nsM.Transport.session(), { { t = "ack", seq = holdSeq } })
+  local first = paintCallsM[#paintCallsM]
+  assert(first.tbl.t == "state" and first.tbl.delta.bags ~= nil, "when the merge is too large the older state stays queued and is painted first")
+  local firstSeq = first.seq
+  local repaintM = _G.WOWC_TEST_TIMER_CALLBACKS
+  local seenPosition = false
+  local repaintIndex = #repaintM - 2
+  for _ = 1, 4 do
+    repaintM[repaintIndex].callback()
+    repaintIndex = #repaintM
+    local painted = paintCallsM[#paintCallsM]
+    if painted.tbl.t == "state" and painted.tbl.delta.position ~= nil then
+      seenPosition = true
+    end
+  end
+  assert(firstSeq ~= nil and seenPosition, "when the merge is too large the newer state stays queued behind the older one")
 end
 
 realPrint("inbox: all assertions passed")

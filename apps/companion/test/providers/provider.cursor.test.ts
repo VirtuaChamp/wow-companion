@@ -2,20 +2,15 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import spawn from "cross-spawn";
 import type { ProviderConfig, ProviderEvent } from "@wow-companion/contracts";
 import {
   createCursorWith,
   cursorArgs,
-  defaultCheckInstalled,
-  defaultListModels,
   parseListModelsOutput,
   runDirFor,
   writeMcpConfig,
 } from "../../src/adapters/providers/cursor.ts";
 import { fakeCheckInstalled, fakeRun, fixturePath, loadJsonlFixture } from "./helpers.ts";
-
-vi.mock("cross-spawn", () => ({ default: { sync: vi.fn() } }));
 
 function baseConfig(models: string[] = ["auto"]): ProviderConfig {
   return {
@@ -562,44 +557,6 @@ describe("provider.cursor", () => {
     expect(models).toContain("claude-sonnet-5-high");
     expect(models).not.toContain("Available");
     expect(models).not.toContain("Tip:");
-  });
-
-  test("provider.cursor.defaultListModels feeds spawn.sync's stdout through the id parser", () => {
-    const text = readFileSync(fixturePath("fixtures/cursor/list-models.txt"), "utf8");
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      status: 0,
-      stdout: Buffer.from(text),
-      stderr: Buffer.from(""),
-    } as ReturnType<typeof spawn.sync>);
-    const models = defaultListModels(fixturePath());
-    expect(models).toContain("gpt-5.1");
-  });
-
-  test("provider.cursor.defaultListModels returns an empty list when spawn.sync fails", () => {
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      error: new Error("spawn cursor-agent ENOENT"),
-      status: null,
-    } as ReturnType<typeof spawn.sync>);
-    expect(defaultListModels(fixturePath())).toEqual([]);
-  });
-
-  test("provider.cursor.defaultCheckInstalled reports installed on a clean spawn.sync exit", () => {
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      status: 0,
-      stdout: Buffer.from("cursor-agent 1.0.0"),
-      stderr: Buffer.from(""),
-    } as ReturnType<typeof spawn.sync>);
-    expect(defaultCheckInstalled(fixturePath())).toEqual({ installed: true });
-  });
-
-  test("provider.cursor.defaultCheckInstalled reports not installed when spawn.sync errors", () => {
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      error: new Error("spawn cursor-agent ENOENT"),
-      status: null,
-    } as ReturnType<typeof spawn.sync>);
-    const result = defaultCheckInstalled(fixturePath());
-    expect(result.installed).toBe(false);
-    expect(result.reason).toBe("spawn cursor-agent ENOENT");
   });
 
   test("provider.cursor.session_unknown: cursor never resumes, so a sessionId refuses at once", async () => {

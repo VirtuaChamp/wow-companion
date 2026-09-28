@@ -1,4 +1,4 @@
-import spawn from "cross-spawn";
+import { runProcess } from "../adapters/providers/spawn.ts";
 
 type CommandOutcome = { ok: boolean; stdout: string; reason?: string };
 export type CommandRunner = (
@@ -16,29 +16,45 @@ export type Probes = {
   refresh(): Promise<void>;
 };
 
-export const runCommand: CommandRunner = (command, args, cwd, timeoutMs) =>
-  new Promise((resolve) => {
-    const child = spawn(command, [...args], { cwd, stdio: ["ignore", "pipe", "ignore"] });
-    const chunks: Buffer[] = [];
-    let settled = false;
-    function settle(outcome: CommandOutcome): void {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(outcome);
+function stringEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  );
+}
+
+export const runCommand: CommandRunner = async (command, args, cwd, timeoutMs) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const lines: string[] = [];
+  try {
+    const outcome = await runProcess(command, [...args], {
+      cwd,
+      env: stringEnv(),
+      signal: controller.signal,
+      onLine: (line) => {
+        if (line.stream === "stdout") lines.push(line.text);
+      },
+    });
+    switch (outcome.outcome) {
+      case "exit":
+        return outcome.code === 0
+          ? { ok: true, stdout: lines.join(String.fromCharCode(10)) }
+          : { ok: false, stdout: "", reason: `${command} ${args.join(" ")} failed` };
+      case "cancelled":
+        return { ok: false, stdout: "", reason: `${command} did not answer in time` };
+      case "kill_failed":
+        return {
+          ok: false,
+          stdout: "",
+          reason: `${command} did not answer in time and could not be stopped`,
+        };
     }
-    const timer = setTimeout(() => {
-      child.kill();
-      settle({ ok: false, stdout: "", reason: `${command} did not answer in time` });
-    }, timeoutMs);
-    child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.on("error", (error) => settle({ ok: false, stdout: "", reason: error.message }));
-    child.on("close", (code) =>
-      code === 0
-        ? settle({ ok: true, stdout: Buffer.concat(chunks).toString("utf8") })
-        : settle({ ok: false, stdout: "", reason: `${command} --version failed` }),
-    );
-  });
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 export function createProbes(input: {
   cwd: string;

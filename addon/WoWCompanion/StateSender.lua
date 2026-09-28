@@ -4,6 +4,7 @@ ns.StateSender = ns.StateSender or {}
 
 local COALESCE_SECONDS = 0.5
 local POSITION_SECONDS = 2
+local FULL_SNAPSHOT_SECONDS = 60
 local EVENTS = {
   "PLAYER_ENTERING_WORLD",
   "PLAYER_LEVEL_UP",
@@ -18,6 +19,17 @@ local EVENTS = {
   "SKILL_LINES_CHANGED",
 }
 
+local SNAPSHOT_KEYS = {
+  "character",
+  "position",
+  "money",
+  "quests",
+  "equipped",
+  "bags",
+  "professions",
+  "talents",
+}
+
 local previous = nil
 local ready = false
 local flushPending = false
@@ -30,18 +42,20 @@ local function sendOne(delta)
 end
 
 local function sendDelta(delta)
-  local seq, err = sendOne(delta)
+  local seq = sendOne(delta)
   if seq then
-    return true
-  end
-  if err == "busy" then
-    return false
+    return
   end
   for key, value in pairs(delta) do
     local keyed = {}
     keyed[key] = value
-    local _, keyErr = sendOne(keyed)
-    if keyErr == "busy" then
+    sendOne(keyed)
+  end
+end
+
+local function isComplete(snapshot)
+  for i = 1, #SNAPSHOT_KEYS do
+    if snapshot[SNAPSHOT_KEYS[i]] == nil then
       return false
     end
   end
@@ -61,15 +75,15 @@ local function flush()
     end
     return
   end
+  if previous == nil and not isComplete(snapshot) then
+    return
+  end
   local delta = ns.State.delta(previous, snapshot)
   if delta == nil then
     return
   end
-  if sendDelta(delta) then
-    previous = snapshot
-  else
-    ns.StateSender.schedule()
-  end
+  sendDelta(delta)
+  previous = snapshot
 end
 
 function ns.StateSender.schedule()
@@ -85,6 +99,14 @@ local function onHelloAcked()
   previous = nil
   flushPending = false
   flush()
+end
+
+local function fullTick()
+  if ready then
+    previous = nil
+    ns.StateSender.schedule()
+  end
+  C_Timer.After(FULL_SNAPSHOT_SECONDS, fullTick)
 end
 
 local function positionTick()
@@ -106,3 +128,4 @@ end)
 
 ns.Transport.onHelloAcked(onHelloAcked)
 C_Timer.After(POSITION_SECONDS, positionTick)
+C_Timer.After(FULL_SNAPSHOT_SECONDS, fullTick)

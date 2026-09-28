@@ -41,6 +41,29 @@ describe("daemon.describe", () => {
     expect(options.providers[0]?.reason).toContain("timed out");
   });
 
+  it("aborts the signal it handed to a provider check that outlives the bound", async () => {
+    let seen: AbortSignal | undefined;
+    const provider: Provider = {
+      id: "claude",
+      describe: (signal) => {
+        seen = signal;
+        return new Promise(() => {});
+      },
+      run: okRun("x"),
+    };
+    const harness = startDaemon({
+      describeTimeoutMs: 40,
+      providers: new Map([["claude", provider]]),
+    });
+    cleanups.push(harness.stop);
+
+    harness.link.push(hello());
+    await waitForSent(harness.link, 3);
+
+    expect(seen).toBeDefined();
+    expect(seen?.aborted).toBe(true);
+  });
+
   it("keeps handling messages while a provider check is still running", async () => {
     const harness = startDaemon({
       describeTimeoutMs: 400,
@@ -66,7 +89,7 @@ describe("daemon.describe", () => {
     );
   });
 
-  it("does not let a hung check for settings block an ask", async () => {
+  it("answers an ask after a settings check that hangs, once the bound has passed", async () => {
     const provider: Provider = {
       id: "claude",
       describe: () => new Promise(() => {}),
@@ -113,5 +136,51 @@ describe("daemon.describe", () => {
 
     if (sent[0]?.t !== "options") throw new Error("expected options");
     expect(sent[0].providers[0]).toMatchObject({ installed: false, enabled: false });
+  });
+
+  it("applies a settings message before an ask that arrives right after it, even when the provider check is slow", async () => {
+    const seen: string[] = [];
+    let slow = false;
+    const claude: Provider = {
+      id: "claude",
+      describe: async () => {
+        if (slow) await new Promise((resolve) => setTimeout(resolve, 120));
+        return { installed: true, enabled: true, models: ["m1", "m2"], efforts: ["low", "high"] };
+      },
+      run: async (input) => {
+        seen.push(`claude:${input.model}`);
+        return { ok: true, value: { sessionId: "s", text: "from claude" } };
+      },
+    };
+    const codex: Provider = {
+      id: "codex",
+      describe: async () => ({ installed: true, enabled: true, models: ["c1"], efforts: ["low"] }),
+      run: async (input) => {
+        seen.push(`codex:${input.model}`);
+        return { ok: true, value: { sessionId: "s", text: "from codex" } };
+      },
+    };
+    const harness = startDaemon({
+      describeMaxAgeMs: 0,
+      providers: new Map([
+        ["claude", claude],
+        ["codex", codex],
+      ]),
+    });
+    cleanups.push(harness.stop);
+    harness.link.push(hello());
+    harness.link.push({ t: "state", seq: 1, delta: makeSnapshot() });
+    await waitForSent(harness.link, 3);
+    slow = true;
+
+    harness.link.push({ t: "settings", chat: "default", provider: "codex", model: "c1" });
+    harness.link.push({ t: "ask", id: "a1", chat: "default", text: "hi", mentions: [] });
+    await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
+
+    expect(seen).toEqual(["codex:c1"]);
+    expect(harness.link.sent().some((msg) => msg.t === "error")).toBe(false);
+    expect(harness.link.sent().find((msg) => msg.t === "reply")).toMatchObject({
+      provider: "codex",
+    });
   });
 });

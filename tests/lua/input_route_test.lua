@@ -203,4 +203,21 @@ ns.Transport.sent = {}
 input:Fire("OnEnterPressed")
 assert(#ns.Transport.sent == 1 and ns.Transport.sent[1].chat == "chat-2", "Enter accepts the chat name and opens that chat")
 
+do
+  local realSend = ns.Transport.send
+  ns.Transport.send = function()
+    return nil, "busy"
+  end
+  local messagesBefore = #ns.AiWindow.scrollFrame.messages
+  input:SetText("will not go through")
+  input:Fire("OnEnterPressed")
+  ns.Transport.send = realSend
+
+  assert(input:GetText() == "will not go through", "a refused ask keeps its text in the input line")
+  assert(#ns.AiWindow.scrollFrame.messages == messagesBefore + 1, "a refused ask prints exactly one line")
+  local line = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+  assert(line:find("busy, not sent", 1, true) ~= nil, "the line says the ask was not sent because the transport is busy")
+  assert(line:find("will not go through", 1, true) == nil, "no you line is printed for a refused ask")
+end
+
 print("input.route: all assertions passed")

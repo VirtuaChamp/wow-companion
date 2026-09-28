@@ -182,6 +182,37 @@ local function describeTooLarge(tbl)
   return tostring(tbl.t)
 end
 
+local function mergeDeltas(older, newer)
+  local merged = {}
+  for key, value in pairs(older or {}) do
+    merged[key] = value
+  end
+  for key, value in pairs(newer or {}) do
+    merged[key] = value
+  end
+  return merged
+end
+
+local function mergeIntoQueuedState(tbl, seq)
+  for i = #sendQueue, 1, -1 do
+    local queued = sendQueue[i]
+    if queued.t == "state" then
+      local mergedMsg = {}
+      for key, value in pairs(tbl) do
+        mergedMsg[key] = value
+      end
+      mergedMsg.delta = mergeDeltas(queued.msg.delta, tbl.delta)
+      local frames = ns.Codec.encode(mergedMsg, seq)
+      if frames then
+        sendQueue[i] = { seq = seq, frames = frames, t = "state", msg = mergedMsg }
+        return true
+      end
+      return false
+    end
+  end
+  return false
+end
+
 function ns.Transport.send(tbl)
   if tbl.t ~= "state" then
     local queued = #sendQueue + (current and 1 or 0)
@@ -190,6 +221,9 @@ function ns.Transport.send(tbl)
     end
   end
   local seq = nextSeq()
+  if tbl.t == "state" and mergeIntoQueuedState(tbl, seq) then
+    return seq
+  end
   local frames, err = ns.Codec.encode(tbl, seq)
   if not frames then
     if err == "too_large" then
@@ -201,14 +235,7 @@ function ns.Transport.send(tbl)
     end
     return nil, err
   end
-  if tbl.t == "state" then
-    for i = #sendQueue, 1, -1 do
-      if sendQueue[i].t == "state" then
-        table.remove(sendQueue, i)
-      end
-    end
-  end
-  local entry = { seq = seq, frames = frames, t = tbl.t }
+  local entry = { seq = seq, frames = frames, t = tbl.t, msg = tbl }
   if current then
     table.insert(sendQueue, entry)
   else

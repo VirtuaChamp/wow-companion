@@ -59,18 +59,26 @@ export function createDaemon(deps: DaemonDeps): Daemon {
   let loop: Promise<void> = Promise.resolve();
   let stopped = false;
 
+  let settingsPending: Promise<void> | undefined;
+
   function dispatch(msg: GameToCompanion): void {
     const report = (error: unknown): void => ctx.log(`message ${msg.t} failed: ${String(error)}`);
+    const gated =
+      settingsPending !== undefined && (msg.t === "ask" || msg.t === "cmd" || msg.t === "settings");
     let running: Promise<void> | undefined;
     try {
-      running = handle(ctx, msg);
+      running = gated ? settingsPending?.then(() => handle(ctx, msg)) : handle(ctx, msg);
     } catch (error) {
       report(error);
       return;
     }
     if (running === undefined) return;
-    const tracked = running.catch(report).finally(() => detached.delete(tracked));
+    const tracked: Promise<void> = running.catch(report).finally(() => {
+      detached.delete(tracked);
+      if (settingsPending === tracked) settingsPending = undefined;
+    });
     detached.add(tracked);
+    if (msg.t === "settings") settingsPending = tracked;
   }
 
   return {

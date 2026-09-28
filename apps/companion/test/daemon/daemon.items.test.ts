@@ -68,42 +68,31 @@ describe("daemon.items", () => {
   });
 
   it("answers item_timeout when the game does not answer in time and ignores a late answer for that request", async () => {
-    const harness = startDaemon({ itemTimeoutMs: 20 });
+    const harness = startDaemon({ itemTimeoutMs: 100 });
     cleanups.push(harness.stop);
     harness.link.push(hello());
     await waitForSent(harness.link, 3);
 
-    const result = await harness.daemon.api.postItems([200]);
-    expect(result).toEqual({ ok: false, error: "item_timeout" });
+    expect(await harness.daemon.api.postItems([200])).toEqual({ ok: false, error: "item_timeout" });
     const expired = harness.link.sent()[3];
     if (expired?.t !== "itemreq") throw new Error("expected itemreq");
 
-    const fresh = startDaemon({ itemTimeoutMs: 500 });
-    cleanups.push(fresh.stop);
-    fresh.link.push(hello());
-    await waitForSent(fresh.link, 3);
-    const second = fresh.daemon.api.postItems([201]);
-    const secondRequest = (await waitForSent(fresh.link, 4))[3];
+    const second = harness.daemon.api.postItems([201]);
+    const secondRequest = (await waitForSent(harness.link, 5))[4];
     if (secondRequest?.t !== "itemreq") throw new Error("expected itemreq");
-    fresh.link.push({ t: "items", req: "req-does-not-exist", items: [detail] });
+    expect(secondRequest.req).not.toBe(expired.req);
+    const sentBefore = harness.link.sent().length;
+
+    harness.link.push({ t: "items", req: expired.req, items: [detail] });
     const stillPending = await Promise.race([
       second.then(() => "answered"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 40)),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 30)),
     ]);
     expect(stillPending).toBe("pending");
-    fresh.link.push({ t: "items", req: secondRequest.req, items: [{ ...detail, itemId: 201 }] });
-    expect(await second).toEqual({ ok: true, value: [{ ...detail, itemId: 201 }] });
+    expect(harness.link.sent()).toHaveLength(sentBefore);
 
-    const before = harness.link.sent().length;
-    harness.link.push({ t: "items", req: expired.req, items: [detail] });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(harness.link.sent()).toHaveLength(before);
-    const next = harness.daemon.api.postItems([202]);
-    const nextRequest = (await waitForSent(harness.link, before + 1))[before];
-    if (nextRequest?.t !== "itemreq") throw new Error("expected itemreq");
-    expect(nextRequest.req).not.toBe(expired.req);
-    harness.link.push({ t: "items", req: nextRequest.req, items: [{ ...detail, itemId: 202 }] });
-    expect(await next).toEqual({ ok: true, value: [{ ...detail, itemId: 202 }] });
+    harness.link.push({ t: "items", req: secondRequest.req, items: [{ ...detail, itemId: 201 }] });
+    expect(await second).toEqual({ ok: true, value: [{ ...detail, itemId: 201 }] });
   });
 
   it("answers an empty ids list without spending a reply slot", async () => {

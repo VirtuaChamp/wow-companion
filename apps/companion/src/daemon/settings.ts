@@ -23,7 +23,7 @@ export async function onSettings(
   ctx: DaemonContext,
   msg: Extract<GameToCompanion, { t: "settings" }>,
 ): Promise<void> {
-  const described = await ctx.describe.refresh();
+  const described = await ctx.describe.ensureFresh(ctx.describeMaxAgeMs);
   const applied = apply(ctx.state.settings, msg, providerOptions(described));
   if (!applied.ok) {
     const refusal = settingsRefusal(applied.error, msg.provider);

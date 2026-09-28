@@ -45,18 +45,44 @@ function toEffortLevel(effort: string | undefined): EffortLevel | undefined {
   return effort as EffortLevel;
 }
 
+function abortable<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  work.catch(() => undefined);
+  if (signal === undefined) return work;
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(new Error("provider check cancelled"));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function createClaudeWith(queryFn: QueryFn): CreateProvider {
   return (config) => {
     const provider: Provider = {
       id: "claude",
-      async describe() {
+      async describe(signal) {
         let q: MinimalQuery | undefined;
+        const onAbort = (): void => q?.close();
+        signal?.addEventListener("abort", onAbort, { once: true });
         try {
           q = queryFn({
             prompt: "",
             options: { ...DESCRIBE_OPTIONS, cwd: config.cwd },
           });
-          const models = await q.supportedModels();
+          if (signal?.aborted) q.close();
+          const models = await abortable(q.supportedModels(), signal);
           const listed = models.map((m) => m.value);
           const finalModels = listed.length > 0 ? listed : [...config.models];
           if (finalModels.length === 0) {
@@ -85,6 +111,7 @@ export function createClaudeWith(queryFn: QueryFn): CreateProvider {
             efforts: [],
           };
         } finally {
+          signal?.removeEventListener("abort", onAbort);
           q?.close();
         }
       },

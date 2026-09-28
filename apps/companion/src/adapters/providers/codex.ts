@@ -1,4 +1,3 @@
-import spawn from "cross-spawn";
 import { mkdirSync } from "node:fs";
 import type {
   CreateProvider,
@@ -113,17 +112,6 @@ export function codexArgs(input: {
     return ["exec", ...execOptions, "resume", "--json", input.sessionId, prompt];
   }
   return ["exec", "--json", ...execOptions, prompt];
-}
-
-export function defaultCheckInstalled(cwd: string): { installed: boolean; reason?: string } {
-  const check = spawn.sync("codex", ["--version"], { cwd });
-  if (check.error || check.status !== 0) {
-    return {
-      installed: false,
-      reason: check.error ? check.error.message : "codex --version failed",
-    };
-  }
-  return { installed: true };
 }
 
 export function createCodexWith(run: RunFn, checkInstalled: CheckInstalledFn): CreateProvider {
