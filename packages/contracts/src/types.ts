@@ -59,6 +59,7 @@ export type Upgrade = {
   delta: Record<string, number>;
 };
 export type McpLaunch = { command: string; args: string[]; env: Record<string, string> };
+export type Choice = { provider: ProviderId; model: string; effort?: Effort };
 
 export type GameToCompanion =
   | { t: "hello"; v: 1; build: string; iface: number }
@@ -98,7 +99,8 @@ export type CompanionToGame =
         efforts: Effort[];
         current: { model: string; effort?: Effort };
       }[];
-      defaultProvider: ProviderId;
+      active: Choice;
+      chat?: { id: string } & Choice;
       companionVersion?: string;
     }
   | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }

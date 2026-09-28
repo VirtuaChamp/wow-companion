@@ -6,11 +6,16 @@ local STRINGS = {
   categoryName = "WoW Companion",
   offline = "Companion offline",
   scopeThisChat = "This chat only",
+  scopeThisChatTooltip = "Show and change the provider, model and effort for this chat only, instead of every chat.",
   providerLabel = "AI provider",
+  providerTooltip = "Which AI answers questions asked in this chat window.",
   modelLabel = "Model",
+  modelTooltip = "Which model the selected provider runs your questions through.",
   effortLabel = "Effort",
+  effortTooltip = "How much the selected provider reasons before it answers.",
   notInstalledReason = "Not installed",
   disabledReason = "Disabled",
+  noModelsReason = "No models listed",
 }
 
 local VARIABLES = {
@@ -18,15 +23,20 @@ local VARIABLES = {
   model = "WOWC_MODEL",
   effort = "WOWC_EFFORT",
   scope = "WOWC_SCOPE",
+  hub = "WOWC_HUB",
 }
 
 local state = {
   online = false,
   providers = {},
-  defaultProvider = nil,
-  activeChat = nil,
-  current = { provider = nil, model = nil, effort = nil, scope = "global" },
+  active = nil,
+  chat = nil,
+  activeChatId = nil,
+  scopeChecked = false,
+  pending = nil,
 }
+
+local lastNotified = { provider = nil, model = nil, effort = nil, scope = false }
 
 local category
 
@@ -39,28 +49,8 @@ local function findProvider(id)
   return nil
 end
 
-local function activeProvider()
-  return findProvider(state.current.provider)
-end
-
 local function isUsable(provider)
-  return provider ~= nil and provider.installed and provider.enabled
-end
-
-local function normalizeValue(value)
-  if value == nil or value == "" then
-    return nil
-  end
-  return value
-end
-
-local function firstUsableProvider()
-  for _, provider in ipairs(state.providers) do
-    if isUsable(provider) then
-      return provider
-    end
-  end
-  return nil
+  return provider ~= nil and provider.installed and provider.enabled and #provider.models > 0
 end
 
 local function contains(list, value)
@@ -72,6 +62,13 @@ local function contains(list, value)
   return false
 end
 
+local function normalizeValue(value)
+  if value == nil or value == "" then
+    return nil
+  end
+  return value
+end
+
 local function listedValue(list, value)
   local normalized = normalizeValue(value)
   if normalized and contains(list, normalized) then
@@ -80,34 +77,16 @@ local function listedValue(list, value)
   return nil
 end
 
-local function applyProviderCurrent(provider)
-  state.current.provider = provider.id
-  local current = provider.current or {}
-  state.current.model = listedValue(provider.models, current.model) or provider.models[1]
-  state.current.effort = listedValue(provider.efforts, current.effort) or provider.efforts[1]
+local function displayedChoice()
+  if state.scopeChecked and state.chat then
+    return state.chat
+  end
+  return state.active
 end
 
-local function notifyPanel()
-  Settings.NotifyUpdate(VARIABLES.provider)
-  Settings.NotifyUpdate(VARIABLES.model)
-  Settings.NotifyUpdate(VARIABLES.effort)
-  Settings.NotifyUpdate(VARIABLES.scope)
-end
-
-local function sendSettings()
-  local provider = state.current.provider
-  local model = state.current.model
-  if not provider or not model then
-    return
-  end
-  local message = { t = "settings", provider = provider, model = model }
-  if state.current.effort then
-    message.effort = state.current.effort
-  end
-  if state.current.scope == "chat" then
-    message.chat = state.activeChat
-  end
-  ns.Transport.send(message)
+local function activeProvider()
+  local choice = displayedChoice()
+  return choice and findProvider(choice.provider)
 end
 
 function ns.Settings.isOnline()
@@ -115,11 +94,12 @@ function ns.Settings.isOnline()
 end
 
 function ns.Settings.current()
+  local choice = displayedChoice() or {}
   return {
-    provider = state.current.provider,
-    model = state.current.model,
-    effort = state.current.effort,
-    scope = state.current.scope,
+    provider = choice.provider,
+    model = choice.model,
+    effort = choice.effort,
+    scope = state.scopeChecked and "chat" or "global",
   }
 end
 
@@ -146,6 +126,8 @@ function ns.Settings.providerOptions()
       entry.reason = provider.reason or STRINGS.notInstalledReason
     elseif not provider.enabled then
       entry.reason = provider.reason or STRINGS.disabledReason
+    elseif #provider.models == 0 then
+      entry.reason = provider.reason or STRINGS.noModelsReason
     end
     table.insert(entries, entry)
   end
@@ -182,72 +164,122 @@ function ns.Settings.isEffortEnabled()
 end
 
 function ns.Settings.isScopeEnabled()
-  return state.online and state.activeChat ~= nil
+  return state.online and state.activeChatId ~= nil
+end
+
+local function currentDisplay()
+  local choice = displayedChoice() or {}
+  return { provider = choice.provider, model = choice.model, effort = choice.effort, scope = state.scopeChecked }
+end
+
+local function notifyPanel()
+  Settings.NotifyUpdate(VARIABLES.hub)
+
+  local display = currentDisplay()
+  if display.provider ~= lastNotified.provider then
+    Settings.NotifyUpdate(VARIABLES.provider)
+  end
+  if display.model ~= lastNotified.model then
+    Settings.NotifyUpdate(VARIABLES.model)
+  end
+  if display.effort ~= lastNotified.effort then
+    Settings.NotifyUpdate(VARIABLES.effort)
+  end
+  if display.scope ~= lastNotified.scope then
+    Settings.NotifyUpdate(VARIABLES.scope)
+  end
+  lastNotified = display
+end
+
+local function sendChoice(choice)
+  local message = { t = "settings", provider = choice.provider, model = choice.model }
+  local includesChat = state.scopeChecked and state.activeChatId ~= nil
+  if choice.effort then
+    message.effort = choice.effort
+  end
+  if includesChat then
+    message.chat = state.activeChatId
+  end
+  state.pending = { provider = choice.provider, model = choice.model, effort = choice.effort, chat = includesChat }
+  ns.Transport.send(message)
 end
 
 function ns.Settings.setProvider(id)
   local provider = findProvider(id)
-  if isUsable(provider) then
-    applyProviderCurrent(provider)
-    notifyPanel()
-    sendSettings()
+  if not isUsable(provider) then
+    Settings.NotifyUpdate(VARIABLES.provider)
     return
   end
+  local current = provider.current or {}
+  sendChoice({
+    provider = provider.id,
+    model = current.model,
+    effort = listedValue(provider.efforts, current.effort),
+  })
   notifyPanel()
 end
 
 function ns.Settings.setModel(model)
-  local provider = activeProvider()
-  if provider and contains(provider.models, model) then
-    state.current.model = model
-    notifyPanel()
-    sendSettings()
+  local choice = displayedChoice()
+  local provider = choice and findProvider(choice.provider)
+  if not provider or not contains(provider.models, model) then
+    Settings.NotifyUpdate(VARIABLES.model)
     return
   end
+  sendChoice({ provider = provider.id, model = model, effort = choice.effort })
   notifyPanel()
 end
 
 function ns.Settings.setEffort(effort)
-  local provider = activeProvider()
-  if provider and contains(provider.efforts, effort) then
-    state.current.effort = effort
-    notifyPanel()
-    sendSettings()
+  local choice = displayedChoice()
+  local provider = choice and findProvider(choice.provider)
+  if not provider or not contains(provider.efforts, effort) then
+    Settings.NotifyUpdate(VARIABLES.effort)
     return
   end
+  sendChoice({ provider = provider.id, model = choice.model, effort = effort })
   notifyPanel()
 end
 
-function ns.Settings.setScope(scope)
-  local isValidScope = scope == "chat" or scope == "global"
-  if isValidScope and (scope ~= "chat" or state.activeChat) then
-    state.current.scope = scope
-    notifyPanel()
-    sendSettings()
+function ns.Settings.setScope(checked)
+  if checked and not ns.Settings.isScopeEnabled() then
+    Settings.NotifyUpdate(VARIABLES.scope)
     return
   end
+  state.scopeChecked = checked
   notifyPanel()
+end
+
+local function noticeText(choice)
+  return string.format("[Claude] now using %s · %s · %s", choice.provider, choice.model, choice.effort or "unknown")
+end
+
+local function pendingConfirmedBy(msg)
+  if not state.pending then
+    return nil
+  end
+  local target = state.pending.chat and msg.chat or msg.active
+  if not target then
+    return nil
+  end
+  if
+    target.provider == state.pending.provider
+    and target.model == state.pending.model
+    and target.effort == state.pending.effort
+  then
+    return state.pending
+  end
+  return nil
 end
 
 function ns.Settings.onOptions(msg)
   state.online = true
   state.providers = msg.providers
-  state.defaultProvider = msg.defaultProvider
-
-  local provider = activeProvider()
-  if not isUsable(provider) then
-    provider = findProvider(state.defaultProvider)
-  end
-  if not isUsable(provider) then
-    provider = firstUsableProvider()
-  end
-
-  if provider then
-    applyProviderCurrent(provider)
-  else
-    state.current.provider = nil
-    state.current.model = nil
-    state.current.effort = nil
+  local confirmed = pendingConfirmedBy(msg)
+  state.active = msg.active
+  state.chat = msg.chat
+  if confirmed then
+    state.pending = nil
   end
 
   if msg.companionVersion then
@@ -255,11 +287,24 @@ function ns.Settings.onOptions(msg)
   end
 
   notifyPanel()
+
+  if confirmed then
+    ns.AiWindow.notice(noticeText(confirmed))
+  end
 end
 
 function ns.Settings.onChats(msg)
-  state.activeChat = msg.active
+  state.activeChatId = msg.active
   notifyPanel()
+end
+
+function ns.Settings.onError(msg)
+  if not state.pending then
+    return
+  end
+  state.pending = nil
+  notifyPanel()
+  ns.AiWindow.notice(msg.message)
 end
 
 local function ensureCategory()
@@ -269,6 +314,18 @@ local function ensureCategory()
 
   category = Settings.RegisterVerticalLayoutCategory(STRINGS.categoryName)
 
+  Settings.RegisterProxySetting(
+    category,
+    VARIABLES.hub,
+    Settings.VarType.String,
+    "",
+    "",
+    function()
+      return ""
+    end,
+    function() end
+  )
+
   local providerSetting = Settings.RegisterProxySetting(
     category,
     VARIABLES.provider,
@@ -276,15 +333,17 @@ local function ensureCategory()
     STRINGS.providerLabel,
     "",
     function()
-      return state.current.provider or ""
+      local choice = displayedChoice()
+      return (choice and choice.provider) or ""
     end,
     function(value)
       ns.Settings.setProvider(value)
     end
   )
   local providerInitializer =
-    Settings.CreateDropdown(category, providerSetting, ns.Settings.providerOptions, STRINGS.providerLabel)
+    Settings.CreateDropdown(category, providerSetting, ns.Settings.providerOptions, STRINGS.providerTooltip)
   providerInitializer:AddModifyPredicate(ns.Settings.isOnline)
+  providerInitializer:AddEvaluateStateCVar(VARIABLES.hub)
 
   local modelSetting = Settings.RegisterProxySetting(
     category,
@@ -293,15 +352,17 @@ local function ensureCategory()
     STRINGS.modelLabel,
     "",
     function()
-      return state.current.model or ""
+      local choice = displayedChoice()
+      return (choice and choice.model) or ""
     end,
     function(value)
       ns.Settings.setModel(value)
     end
   )
   local modelInitializer =
-    Settings.CreateDropdown(category, modelSetting, ns.Settings.modelOptions, STRINGS.modelLabel)
+    Settings.CreateDropdown(category, modelSetting, ns.Settings.modelOptions, STRINGS.modelTooltip)
   modelInitializer:AddModifyPredicate(ns.Settings.isOnline)
+  modelInitializer:AddEvaluateStateCVar(VARIABLES.hub)
 
   local effortSetting = Settings.RegisterProxySetting(
     category,
@@ -310,15 +371,17 @@ local function ensureCategory()
     STRINGS.effortLabel,
     "",
     function()
-      return state.current.effort or ""
+      local choice = displayedChoice()
+      return (choice and choice.effort) or ""
     end,
     function(value)
       ns.Settings.setEffort(value)
     end
   )
   local effortInitializer =
-    Settings.CreateDropdown(category, effortSetting, ns.Settings.effortOptions, STRINGS.effortLabel)
+    Settings.CreateDropdown(category, effortSetting, ns.Settings.effortOptions, STRINGS.effortTooltip)
   effortInitializer:AddModifyPredicate(ns.Settings.isEffortEnabled)
+  effortInitializer:AddEvaluateStateCVar(VARIABLES.hub)
 
   local scopeSetting = Settings.RegisterProxySetting(
     category,
@@ -327,14 +390,15 @@ local function ensureCategory()
     STRINGS.scopeThisChat,
     false,
     function()
-      return state.current.scope == "chat"
+      return state.scopeChecked
     end,
     function(value)
-      ns.Settings.setScope(value and "chat" or "global")
+      ns.Settings.setScope(value)
     end
   )
-  local scopeInitializer = Settings.CreateCheckbox(category, scopeSetting, STRINGS.scopeThisChat)
+  local scopeInitializer = Settings.CreateCheckbox(category, scopeSetting, STRINGS.scopeThisChatTooltip)
   scopeInitializer:AddModifyPredicate(ns.Settings.isScopeEnabled)
+  scopeInitializer:AddEvaluateStateCVar(VARIABLES.hub)
 
   Settings.RegisterAddOnCategory(category)
 

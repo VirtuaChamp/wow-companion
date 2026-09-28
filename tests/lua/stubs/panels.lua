@@ -42,6 +42,7 @@ _G.CreateFrame = function(frameType, name, parent, template)
     end)
   end)
   ensureMethod(frame, "SetPoint", function() end)
+  ensureMethod(frame, "SetJustifyH", function() end)
   ensureMethod(frame, "ClearAllPoints", function() end)
   ensureMethod(frame, "SetSize", function(self, width, height)
     self.width = width
@@ -70,6 +71,13 @@ _G.CreateFrame = function(frameType, name, parent, template)
   end)
   ensureMethod(frame, "IsShown", function(self)
     return self.shown == true
+  end)
+  ensureMethod(frame, "SetShown", function(self, shown)
+    if shown then
+      self:Show()
+    else
+      self:Hide()
+    end
   end)
   ensureMethod(frame, "SetMovable", function() end)
   ensureMethod(frame, "EnableMouse", function() end)
@@ -126,6 +134,10 @@ _G.CreateFrame = function(frameType, name, parent, template)
 
   if template == "InputScrollFrameTemplate" then
     frame.EditBox = frame.EditBox or _G.CreateFrame("EditBox", nil, frame)
+    if not frame.CharCount then
+      frame.CharCount = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+      frame.CharCount:Show()
+    end
   end
 
   if closeButtonTemplates[template] then
@@ -183,6 +195,9 @@ end
 
 _G.WOWC_TEST_REGISTERED_CATEGORIES = {}
 _G.WOWC_TEST_REGISTERED_SETTINGS = {}
+_G.WOWC_TEST_CATEGORIES_BY_ID = {}
+
+local refreshEnabledState
 
 local nextCategoryID = 1
 
@@ -193,6 +208,7 @@ function _G.Settings.RegisterVerticalLayoutCategory(name)
     return self.id
   end
   _G.WOWC_TEST_LAST_REGISTERED_CATEGORY = category
+  _G.WOWC_TEST_CATEGORIES_BY_ID[category.id] = category
   return category
 end
 
@@ -205,6 +221,13 @@ function _G.Settings.OpenToCategory(categoryID, scrollToElementName)
   assert(type(categoryID) == "number", "OpenToCategory expects a category id (number), got " .. type(categoryID))
   _G.WOWC_TEST_LAST_OPENED_CATEGORY = categoryID
   _G.WOWC_TEST_LAST_OPENED_ELEMENT = scrollToElementName
+
+  local category = _G.WOWC_TEST_CATEGORIES_BY_ID[categoryID]
+  if category then
+    for _, initializer in ipairs(category.initializers) do
+      refreshEnabledState(initializer)
+    end
+  end
 end
 
 function _G.Settings.GetSetting(variable)
@@ -213,8 +236,22 @@ end
 
 function _G.Settings.NotifyUpdate(variable)
   local setting = _G.Settings.GetSetting(variable)
-  if setting then
-    setting.notifyCount = (setting.notifyCount or 0) + 1
+  if not setting then
+    return
+  end
+  setting.notifyCount = (setting.notifyCount or 0) + 1
+
+  local initializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS[variable]
+  if initializer and initializer.kind == "checkbox" then
+    initializer.soundCount = (initializer.soundCount or 0) + 1
+  end
+
+  for _, candidate in pairs(_G.WOWC_TEST_REGISTERED_INITIALIZERS) do
+    for _, cvar in ipairs(candidate.evaluateStateCVars) do
+      if cvar == variable then
+        refreshEnabledState(candidate)
+      end
+    end
   end
 end
 
@@ -248,6 +285,7 @@ local function newInitializer(kind, setting, options, tooltip)
     options = options,
     tooltip = tooltip,
     modifyPredicates = {},
+    evaluateStateCVars = {},
   }
   function initializer:AddModifyPredicate(fn)
     table.insert(self.modifyPredicates, fn)
@@ -277,7 +315,19 @@ local function newInitializer(kind, setting, options, tooltip)
     end
     return resolved
   end
+  function initializer:AddEvaluateStateCVar(cvar)
+    table.insert(self.evaluateStateCVars, cvar)
+  end
   return initializer
+end
+
+refreshEnabledState = function(initializer)
+  initializer.enabledState = initializer:EvaluateModifyPredicates()
+end
+
+function _G.WOWC_TEST_IsEnabled(variable)
+  local initializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS[variable]
+  return initializer and initializer.enabledState
 end
 
 _G.WOWC_TEST_REGISTERED_INITIALIZERS = {}

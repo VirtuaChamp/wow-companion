@@ -9,6 +9,8 @@ function ns.Transport.onMessage(handler)
   table.insert(ns.Transport.handlers, handler)
 end
 
+ns.AiWindow = { notice = function() end }
+
 _G.GetRealmName = function()
   return "TestRealm"
 end
@@ -34,7 +36,6 @@ assert(string.find(beforeOptionsText, "Provider: unknown", 1, true), "provider p
 
 ns.Settings.onOptions({
   t = "options",
-  defaultProvider = "claude",
   companionVersion = "0.4.2",
   providers = {
     {
@@ -46,11 +47,14 @@ ns.Settings.onOptions({
       current = { model = "sonnet", effort = "medium" },
     },
   },
+  active = { provider = "claude", model = "sonnet", effort = "medium" },
 })
 
 local reportFrame = ns.Report.open()
 assert(reportFrame:IsShown() == true, "report frame is shown")
 assert(reportFrame.TitleText:GetText() ~= "" and reportFrame.TitleText:GetText() ~= nil, "report frame has a title")
+assert(reportFrame.Instructions:GetText() ~= "" and reportFrame.Instructions:GetText() ~= nil, "report frame tells the user what to do with the box (ui-r2-5)")
+assert(reportFrame.ScrollFrame.CharCount:IsShown() == false, "the character counter is hidden (aca-r2-12/ui-r2-1)")
 
 local titledFrameName = reportFrame:GetName()
 local registeredAsSpecial = false
