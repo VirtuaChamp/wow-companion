@@ -2,6 +2,9 @@ dofile("tests/lua/wow_stubs.lua")
 
 local ns = {}
 ns.Transport = { sent = {} }
+ns.Transport.session = function()
+  return "sessionA"
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
@@ -46,5 +49,21 @@ box:Fire("OnTextChanged", true)
 assert(box:GetText() == fullText, "typing into the full-text box restores the reply text: the box is read-only")
 box:Fire("OnTextChanged", false)
 assert(box:GetText() == fullText, "a programmatic change notification leaves the text as it is")
+
+local scroll = ns.AiWindow.moreBox.scrollFrame
+assert(scroll.template == "InputScrollFrameTemplate", "the full-text box scrolls in Blizzard's input scroll frame")
+local viewportHeight = scroll:GetHeight()
+assert(viewportHeight > 0, "the scroll viewport has an explicit height")
+assert(box:GetHeight() <= viewportHeight, "a short reply fits the viewport")
+
+local longText = string.rep("word ", 400)
+ns.AiWindow.onReply({ t = "reply", id = "ask-long", chat = "default", provider = "claude", summary = "long", full = longText })
+local longLink = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text:match("|H(addon:[^|]+)|h")
+ns.AiWindow.scrollFrame:Fire("OnHyperlinkClick", longLink, "[more]", "LeftButton")
+assert(ns.AiWindow.moreBoxEditBox:GetText() == longText, "the long reply is shown in full")
+assert(
+  ns.AiWindow.moreBoxEditBox:GetHeight() > viewportHeight,
+  "the edit box grows past the viewport for a long reply, so the scroll frame has content to scroll"
+)
 
 print("more.link: all assertions passed")

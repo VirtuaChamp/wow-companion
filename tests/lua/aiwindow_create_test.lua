@@ -2,6 +2,9 @@ dofile("tests/lua/wow_stubs.lua")
 
 local ns = {}
 ns.Transport = { sent = {} }
+ns.Transport.session = function()
+  return "sessionA"
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end

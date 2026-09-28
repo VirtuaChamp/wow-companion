@@ -2,6 +2,9 @@ dofile("tests/lua/wow_stubs.lua")
 
 local ns = {}
 ns.Transport = { sent = {} }
+ns.Transport.session = function()
+  return "sessionA"
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
@@ -151,5 +154,53 @@ ns.Transport.sent = {}
 input:Fire("OnEnterPressed")
 assert(#ns.Transport.sent == 1, "with no popup open, Enter sends the literal text")
 assert(ns.Transport.sent[1].text == "@zzzzzz-no-match", "unmatched @ text is sent literally, not swallowed")
+
+ns.AiWindow.onChats({
+  active = "chat-1",
+  list = {
+    { id = "chat-1", name = "Gearing up", provider = "claude", lastAt = 1 },
+    { id = "chat-2", name = "Leveling plan", provider = "codex", lastAt = 2 },
+    { id = "chat-3", name = "Gearing later", provider = "claude", lastAt = 3 },
+  },
+})
+
+input:SetText("/ai ch")
+input:Fire("OnTextChanged", true)
+assert(ns.AiWindow.popup.kind == "sub", "a partial sub-command still offers sub-command names")
+input:Fire("OnTabPressed")
+assert(input:GetText() == "/ai chat ", "Tab completes the chat sub-command")
+assert(ns.AiWindow.popup ~= nil and ns.AiWindow.popup.kind == "chat", "completing chat offers the chat names straight away")
+assert(#ns.AiWindow.popup.items == 3, "an empty chat query lists every chat")
+assert(ns.AiWindow.popup.items[1].name == "Gearing later", "chat names are offered newest first")
+
+input:SetText("/ai chat Gear")
+input:Fire("OnTextChanged", true)
+assert(ns.AiWindow.popup.kind == "chat", "typing after /ai chat completes chat names")
+assert(#ns.AiWindow.popup.items == 2, "only chats matching the typed name are offered")
+assert(ns.AiWindow.popup.items[1].name == "Gearing later" and ns.AiWindow.popup.items[2].name == "Gearing up", "matches keep the newest-first order")
+assert(ns.AiWindow.ghostText:GetText() == "ing later", "the chat-name ghost shows the untyped remainder of the top match")
+input:Fire("OnArrowPressed", "DOWN")
+ns.Transport.sent = {}
+input:Fire("OnTabPressed")
+assert(#ns.Transport.sent == 1, "accepting a chat name sends one command")
+assert(ns.Transport.sent[1].t == "cmd" and ns.Transport.sent[1].name == "open", "accepting a chat name sends open")
+assert(ns.Transport.sent[1].chat == "chat-1", "the picked name resolves to its chat id, not the name")
+assert(input:GetText() == "", "accepting a chat name clears the input line")
+assert(ns.AiWindow.popup == nil, "accepting a chat name closes the popup")
+
+input:SetText("/ai chat plan")
+input:Fire("OnTextChanged", true)
+assert(#ns.AiWindow.popup.items == 1 and ns.AiWindow.popup.items[1].chatId == "chat-2", "a name containing the query is offered with its chat id")
+assert(ns.AiWindow.ghostText:GetText() == "", "a contained match has no ghost remainder")
+
+input:SetText("/ai chat zzz")
+input:Fire("OnTextChanged", true)
+assert(ns.AiWindow.popup == nil, "no chat name matching closes the popup")
+
+input:SetText("/ai chat Level")
+input:Fire("OnTextChanged", true)
+ns.Transport.sent = {}
+input:Fire("OnEnterPressed")
+assert(#ns.Transport.sent == 1 and ns.Transport.sent[1].chat == "chat-2", "Enter accepts the chat name and opens that chat")
 
 print("input.route: all assertions passed")

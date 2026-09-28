@@ -11,6 +11,15 @@ local POPUP_MAX_ROWS = 8
 local POPUP_ROW_HEIGHT = 16
 local MAX_REPLIES = 200
 local MAX_SEEN_REPLY_IDS = 200
+local ASK_ID_SESSION_MAX = 40
+local MORE_BOX_WIDTH = 460
+local MORE_BOX_HEIGHT = 360
+local MORE_BOX_MARGIN_LEFT = 12
+local MORE_BOX_MARGIN_RIGHT = 30
+local MORE_BOX_MARGIN_TOP = 70
+local MORE_BOX_MARGIN_BOTTOM = 40
+local MORE_BOX_SCROLLBAR_ALLOWANCE = 18
+local MORE_BOX_LINE_PADDING = 4
 local RESIZE_MIN_WIDTH = 280
 local RESIZE_MIN_HEIGHT = 180
 local RESIZE_MAX_WIDTH = 900
@@ -34,8 +43,6 @@ local askCounter = 0
 local moreCounter = 0
 local replies = {}
 local replyOrder = {}
-local seenReplyIds = {}
-local seenReplyOrder = {}
 local chatsList = {}
 local activeChat = "default"
 
@@ -56,18 +63,34 @@ local function rememberReply(id, entry)
   end
 end
 
+local function seenStore()
+  WoWCompanionDB = WoWCompanionDB or {}
+  local store = WoWCompanionDB.seenReplies
+  if not store then
+    store = { order = {}, set = {} }
+    WoWCompanionDB.seenReplies = store
+  end
+  return store
+end
+
+local function replySeen(id)
+  return seenStore().set[id] == true
+end
+
 local function markReplySeen(id)
-  seenReplyIds[id] = true
-  table.insert(seenReplyOrder, id)
-  if #seenReplyOrder > MAX_SEEN_REPLY_IDS then
-    local oldest = table.remove(seenReplyOrder, 1)
-    seenReplyIds[oldest] = nil
+  local store = seenStore()
+  store.set[id] = true
+  table.insert(store.order, id)
+  if #store.order > MAX_SEEN_REPLY_IDS then
+    local oldest = table.remove(store.order, 1)
+    store.set[oldest] = nil
   end
 end
 
 local function nextAskId()
   askCounter = askCounter + 1
-  return "ask-" .. askCounter
+  local token = tostring(ns.Transport.session()):gsub("[^A-Za-z0-9_%-]", "_")
+  return "ask-" .. token:sub(-ASK_ID_SESSION_MAX) .. "-" .. askCounter
 end
 
 local function nextMoreId()
@@ -198,7 +221,7 @@ local function refreshGhost(remainder)
   local insetLeft = inputBox:GetTextInsets()
   ghostText:ClearAllPoints()
   ghostText:SetPoint("LEFT", inputBox, "LEFT", insetLeft + ghostMeasure:GetStringWidth(), 0)
-  ghostText:SetText(remainder)
+  ghostText:SetText(sanitize(remainder))
 end
 
 local function refreshPopupFrame()
@@ -215,7 +238,7 @@ local function refreshPopupFrame()
   for i, row in ipairs(popupFrame.rows) do
     local item = popup.items[i]
     if item then
-      row.text:SetText(item.name)
+      row.text:SetText(sanitize(item.name))
       row.text:SetTextColor(itemRowColor(item))
       if item.mention and item.mention.kind == "quest" then
         row.icon:SetAtlas(QUEST_ICON_ATLAS)
@@ -261,7 +284,48 @@ local function findSubCommandQuery(text)
   return text:match("^/ai%s+(%S*)$")
 end
 
+local function findChatQuery(text)
+  return text:match("^/ai%s+chat%s+(.*)$")
+end
+
+local function chatNameMatches(query)
+  local lowered = query:lower()
+  local prefix = {}
+  local inside = {}
+  for _, entry in ipairs(sortedChatsList()) do
+    local name = entry.name
+    if type(name) == "string" then
+      local at = name:lower():find(lowered, 1, true)
+      if lowered == "" or at == 1 then
+        prefix[#prefix + 1] = { name = name, chatId = entry.id }
+      elseif at then
+        inside[#inside + 1] = { name = name, chatId = entry.id }
+      end
+    end
+  end
+  local matches = {}
+  for _, list in ipairs({ prefix, inside }) do
+    for _, match in ipairs(list) do
+      if #matches < POPUP_MAX_ROWS then
+        matches[#matches + 1] = match
+      end
+    end
+  end
+  return matches
+end
+
 function AiWindow.updatePopup(text)
+  local chatQuery = findChatQuery(text)
+  if chatQuery then
+    local matches = chatNameMatches(chatQuery)
+    if #matches == 0 then
+      AiWindow.popup = nil
+    else
+      AiWindow.popup = { kind = "chat", items = matches, ghost = matches[1].name, query = chatQuery }
+    end
+    refreshPopupFrame()
+    return AiWindow.popup
+  end
   local subQuery = findSubCommandQuery(text)
   if subQuery then
     local matches = {}
@@ -304,6 +368,15 @@ function AiWindow.acceptPopup(box)
     if pick then
       box:SetText("/ai " .. pick.name .. " ")
       box:SetCursorPosition(#box:GetText())
+      if pick.name == "chat" then
+        AiWindow.updatePopup(box:GetText())
+        return true
+      end
+    end
+  elseif popup.kind == "chat" then
+    if pick then
+      box:SetText("")
+      ns.Transport.send({ t = "cmd", chat = pick.chatId, name = "open" })
     end
   elseif popup.kind == "mention" then
     if pick then
@@ -484,7 +557,7 @@ end
 
 function AiWindow.onReply(msg)
   if msg.id then
-    if seenReplyIds[msg.id] then
+    if replySeen(msg.id) then
       return
     end
     markReplySeen(msg.id)
@@ -535,28 +608,37 @@ function AiWindow.openMoreBox(fullText)
   if not moreBox then
     moreBox = CreateFrame("Frame", "WoWCompanionMoreBox", UIParent, "ButtonFrameTemplate")
     moreBox:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    moreBox:SetSize(460, 360)
+    moreBox:SetSize(MORE_BOX_WIDTH, MORE_BOX_HEIGHT)
     moreBox:SetFrameStrata("DIALOG")
     if moreBox.TitleContainer and moreBox.TitleContainer.TitleText then
       moreBox.TitleContainer.TitleText:SetText("Claude \226\128\148 full reply")
     end
-    local scroll = CreateFrame("ScrollFrame", "WoWCompanionMoreBoxScroll", moreBox, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", moreBox, "TOPLEFT", 12, -70)
-    scroll:SetPoint("BOTTOMRIGHT", moreBox, "BOTTOMRIGHT", -30, 40)
-    moreBox.editBox = CreateFrame("EditBox", "WoWCompanionMoreBoxEditBox", scroll, "InputBoxTemplate")
-    moreBox.editBox:SetMultiLine(true)
-    moreBox.editBox:SetAutoFocus(true)
-    moreBox.editBox:SetWidth(400)
-    moreBox.editBox:SetScript("OnTextChanged", function(box, isUserInput)
+    local scroll = CreateFrame("ScrollFrame", "WoWCompanionMoreBoxScroll", moreBox, "InputScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", moreBox, "TOPLEFT", MORE_BOX_MARGIN_LEFT, -MORE_BOX_MARGIN_TOP)
+    local viewportWidth = MORE_BOX_WIDTH - MORE_BOX_MARGIN_LEFT - MORE_BOX_MARGIN_RIGHT
+    local viewportHeight = MORE_BOX_HEIGHT - MORE_BOX_MARGIN_TOP - MORE_BOX_MARGIN_BOTTOM
+    scroll:SetSize(viewportWidth, viewportHeight)
+    scroll.CharCount:Hide()
+    local editBox = scroll.EditBox
+    editBox:SetMultiLine(true)
+    editBox:SetAutoFocus(true)
+    editBox:SetWidth(scroll:GetWidth() - MORE_BOX_SCROLLBAR_ALLOWANCE)
+    moreBox.measure = moreBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    moreBox.measure:SetWidth(editBox:GetWidth())
+    moreBox.measure:Hide()
+    editBox:HookScript("OnTextChanged", function(box, isUserInput)
       if isUserInput then
         box:SetText(moreBoxText)
         box:HighlightText()
       end
     end)
-    scroll:SetScrollChild(moreBox.editBox)
+    moreBox.editBox = editBox
     moreBox.scrollFrame = scroll
   end
   moreBoxText = sanitize(fullText)
+  moreBox.measure:SetText(moreBoxText)
+  local textHeight = math.ceil(moreBox.measure:GetStringHeight()) + MORE_BOX_LINE_PADDING
+  moreBox.editBox:SetHeight(math.max(moreBox.scrollFrame:GetHeight(), textHeight))
   moreBox.editBox:SetText(moreBoxText)
   moreBox.editBox:HighlightText()
   moreBox.editBox:SetFocus()

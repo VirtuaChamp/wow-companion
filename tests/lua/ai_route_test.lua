@@ -2,6 +2,9 @@ dofile("tests/lua/wow_stubs.lua")
 
 local ns = {}
 ns.Transport = { sent = {} }
+ns.Transport.session = function()
+  return "sessionA"
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
@@ -168,5 +171,44 @@ assert(
   registered == ns.Core.dispatch,
   "ADDON_LOADED registers the dispatcher through ns.Transport.onMessage, per slice 13's registration contract"
 )
+
+local ASK_ID_PATTERN = "^[A-Za-z0-9_-]+$"
+local firstAsk = ns.AiWindow.submitAsk("first")
+local secondAsk = ns.AiWindow.submitAsk("second")
+assert(firstAsk ~= secondAsk, "two asks in one load never share an id")
+assert(firstAsk:match(ASK_ID_PATTERN) and #firstAsk <= 64, "an ask id stays within [A-Za-z0-9_-]{1,64}")
+
+local function loadFresh(sessionToken)
+  local fresh = {}
+  fresh.Transport = { sent = {} }
+  fresh.Transport.send = function(msg)
+    table.insert(fresh.Transport.sent, msg)
+  end
+  fresh.Transport.session = function()
+    return sessionToken
+  end
+  assert(loadfile("addon/WoWCompanion/AiWindow.lua"))("WoWCompanion", fresh)
+  fresh.AiWindow.create()
+  return fresh
+end
+
+local reloaded = loadFresh("sessionB")
+local reloadedAsk = reloaded.AiWindow.submitAsk("first")
+assert(reloadedAsk ~= firstAsk, "the first ask of a new load never reuses an ask id of the previous load")
+local secondLoadAsk = loadFresh("sessionD").AiWindow.submitAsk("first")
+assert(secondLoadAsk ~= reloadedAsk, "two loads with the same ask counter never mint the same ask id")
+local oddSession = loadFresh(string.rep("x y!", 30))
+local oddAsk = oddSession.AiWindow.submitAsk("first")
+assert(oddAsk:match(ASK_ID_PATTERN) and #oddAsk <= 64, "a session token with odd characters or length still gives a valid ask id")
+
+ns.Core.dispatch({ t = "reply", id = "before-reload", chat = "default", provider = "claude", summary = "shown once", full = "shown once" })
+local reloadedAgain = loadFresh("sessionC")
+reloadedAgain.AiWindow.onReply({ t = "reply", id = "before-reload", chat = "default", provider = "claude", summary = "shown once", full = "shown once" })
+assert(
+  #reloadedAgain.AiWindow.scrollFrame.messages == 0,
+  "a reply re-queued after a reload, already shown before it, is not printed again"
+)
+reloadedAgain.AiWindow.onReply({ t = "reply", id = "after-reload", chat = "default", provider = "claude", summary = "new", full = "new" })
+assert(#reloadedAgain.AiWindow.scrollFrame.messages == 1, "a reply not shown before the reload still prints")
 
 print("ai.route: all assertions passed")

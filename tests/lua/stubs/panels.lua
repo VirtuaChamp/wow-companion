@@ -1,8 +1,52 @@
 local baseCreateFrame = _G.CreateFrame
 
+local function hasMethod(frame, name)
+  if rawget(frame, name) ~= nil then
+    return true
+  end
+  local known = _G.WOWC_TEST_WIDGET_METHODS
+  return known ~= nil and known[name] ~= nil
+end
+
 local function ensureMethod(frame, name, fn)
-  if frame[name] == nil then
+  if not hasMethod(frame, name) then
     frame[name] = fn
+  end
+end
+
+local sharedMethods = {
+  SetJustifyH = function() end,
+  GetName = function(self)
+    return rawget(self, "name")
+  end,
+  SetShown = function(self, shown)
+    if shown then
+      self:Show()
+    else
+      self:Hide()
+    end
+  end,
+  SetEnabled = function(self, enabled)
+    self.enabled = enabled
+  end,
+  IsEnabled = function(self)
+    if rawget(self, "enabled") == nil then
+      return true
+    end
+    return self.enabled
+  end,
+  Enable = function(self)
+    self.enabled = true
+  end,
+  Disable = function(self)
+    self.enabled = false
+  end,
+}
+
+local knownWidgetMethods = _G.WOWC_TEST_WIDGET_METHODS
+for methodName, fn in pairs(sharedMethods) do
+  if knownWidgetMethods and knownWidgetMethods[methodName] == nil then
+    knownWidgetMethods[methodName] = fn
   end
 end
 
@@ -49,7 +93,9 @@ _G.CreateFrame = function(frameType, name, parent, template)
       return baseSetPoint(self, point, ...)
     end
   end
-  ensureMethod(frame, "SetJustifyH", function() end)
+  for methodName, fn in pairs(sharedMethods) do
+    ensureMethod(frame, methodName, fn)
+  end
   ensureMethod(frame, "ClearAllPoints", function() end)
   ensureMethod(frame, "SetSize", function(self, width, height)
     self.width = width
@@ -60,9 +106,6 @@ _G.CreateFrame = function(frameType, name, parent, template)
   end)
   ensureMethod(frame, "SetHeight", function(self, height)
     self.height = height
-  end)
-  ensureMethod(frame, "GetName", function(self)
-    return self.name
   end)
   ensureMethod(frame, "GetWidth", function(self)
     return self.width
@@ -78,13 +121,6 @@ _G.CreateFrame = function(frameType, name, parent, template)
   end)
   ensureMethod(frame, "IsShown", function(self)
     return self.shown == true
-  end)
-  ensureMethod(frame, "SetShown", function(self, shown)
-    if shown then
-      self:Show()
-    else
-      self:Hide()
-    end
   end)
   ensureMethod(frame, "SetMovable", function() end)
   ensureMethod(frame, "EnableMouse", function() end)
@@ -113,21 +149,6 @@ _G.CreateFrame = function(frameType, name, parent, template)
     self.highlighted = true
   end)
   ensureMethod(frame, "SetCursorPosition", function() end)
-  ensureMethod(frame, "SetEnabled", function(self, enabled)
-    self.enabled = enabled
-  end)
-  ensureMethod(frame, "IsEnabled", function(self)
-    if self.enabled == nil then
-      return true
-    end
-    return self.enabled
-  end)
-  ensureMethod(frame, "Enable", function(self)
-    self.enabled = true
-  end)
-  ensureMethod(frame, "Disable", function(self)
-    self.enabled = false
-  end)
   ensureMethod(frame, "CreateFontString", function(self, fsName, _layer, fsTemplate)
     local fontString = _G.CreateFrame("FontString", fsName, self, fsTemplate)
     table.insert(self.children, fontString)
@@ -140,16 +161,16 @@ _G.CreateFrame = function(frameType, name, parent, template)
   end)
 
   if template == "InputScrollFrameTemplate" then
-    frame.EditBox = frame.EditBox or _G.CreateFrame("EditBox", nil, frame)
-    if not frame.CharCount then
+    frame.EditBox = rawget(frame, "EditBox") or _G.CreateFrame("EditBox", nil, frame)
+    if not rawget(frame, "CharCount") then
       frame.CharCount = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
       frame.CharCount:Show()
     end
   end
 
   if closeButtonTemplates[template] then
-    frame.CloseButton = frame.CloseButton or _G.CreateFrame("Button", nil, frame, "UIPanelCloseButtonDefaultAnchors")
-    frame.TitleText = frame.TitleText or frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.CloseButton = rawget(frame, "CloseButton") or _G.CreateFrame("Button", nil, frame, "UIPanelCloseButtonDefaultAnchors")
+    frame.TitleText = rawget(frame, "TitleText") or frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   end
 
   return frame

@@ -14,7 +14,7 @@ local function newRegion(kind)
     scripts = {},
     shown = true,
     text = "",
-    points = {},
+    anchors = {},
     children = {},
     messages = {},
     width = 0,
@@ -67,7 +67,7 @@ function methods:SetPoint(point, a, b, c, d)
   else
     relativeTo, relativePoint, x, y = self.parent, point, a, b
   end
-  self.points[1] = {
+  self.anchors[1] = {
     point = point,
     relativeTo = relativeTo,
     relativePoint = relativePoint or point,
@@ -77,11 +77,11 @@ function methods:SetPoint(point, a, b, c, d)
 end
 
 function methods:ClearAllPoints()
-  self.points = {}
+  self.anchors = {}
 end
 
 function methods:GetPoint(index)
-  local p = self.points[index or 1]
+  local p = self.anchors[index or 1]
   if not p then
     return nil
   end
@@ -89,7 +89,7 @@ function methods:GetPoint(index)
 end
 
 function methods:GetNumPoints()
-  return #self.points
+  return #self.anchors
 end
 
 function methods:SetSize(w, h)
@@ -109,6 +109,10 @@ function methods:GetWidth()
 end
 
 function methods:GetHeight()
+  if self.kind == "EditBox" and self.multiLine and (self.height or 0) == 0 then
+    local perLine = math.max(math.floor(math.max(self.width or 0, 1) / 6), 1)
+    return math.max(math.ceil(#(self.text or "") / perLine), 1) * 14
+  end
   return self.height or 0
 end
 
@@ -250,6 +254,11 @@ function methods:GetStringWidth()
   return #(self.text or "") * 6
 end
 
+function methods:GetStringHeight()
+  local perLine = math.max(math.floor(math.max(self.width or 0, 1) / 6), 1)
+  return math.max(math.ceil(#(self.text or "") / perLine), 1) * 14
+end
+
 function methods:GetTextInsets()
   return 10, 10, 0, 5
 end
@@ -298,6 +307,8 @@ end
 function methods:SetScrollChild(child)
   self.scrollChild = child
 end
+
+_G.WOWC_TEST_WIDGET_METHODS = methods
 
 mockMeta = {
   __index = function(t, key)

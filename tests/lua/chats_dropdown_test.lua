@@ -5,6 +5,9 @@ _G.WOWC_TEST_SERVER_TIME = NOW
 
 local ns = {}
 ns.Transport = { sent = {} }
+ns.Transport.session = function()
+  return "sessionA"
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
