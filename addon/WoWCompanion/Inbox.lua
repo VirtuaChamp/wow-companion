@@ -7,6 +7,7 @@ local HOLD_CYCLES = 3
 local QUEUE_CAP = 8
 local SLOT_COUNT = 200
 local SLOT_WARNING_THRESHOLD = 20
+local HELLO_INTERVAL_SECONDS = 10
 local ACKED_TYPES = { ask = true, items = true, cmd = true, hello = true }
 
 local function makeSessionToken()
@@ -202,6 +203,39 @@ local function repaintTick()
   C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
 end
 
+local function hasQueuedHello()
+  if current and current.t == "hello" then
+    return true
+  end
+  for i = 1, #sendQueue do
+    if sendQueue[i].t == "hello" then
+      return true
+    end
+  end
+  return false
+end
+
+local function announceHello()
+  if hasQueuedHello() then
+    return
+  end
+  local entry, err = buildHelloEntry()
+  if entry then
+    if current then
+      table.insert(sendQueue, entry)
+    else
+      startCurrent(entry)
+    end
+  else
+    print("WoW Companion: failed to encode hello: " .. tostring(err))
+  end
+end
+
+local function helloAnnounceTick()
+  announceHello()
+  C_Timer.After(HELLO_INTERVAL_SECONDS, helloAnnounceTick)
+end
+
 local function pollNextSlot()
   if not exhausted then
     if nextSlotIndex > SLOT_COUNT then
@@ -240,3 +274,4 @@ end
 
 C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
 C_Timer.After(REPAINT_INTERVAL_SECONDS, pollNextSlot)
+C_Timer.After(HELLO_INTERVAL_SECONDS, helloAnnounceTick)

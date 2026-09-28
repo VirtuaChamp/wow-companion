@@ -249,6 +249,139 @@ describe("link.hello", () => {
     const lastContent = last?.data as string;
     expect(lastContent.startsWith('WoWCompanion_Deliver("sess-b"')).toBe(true);
   });
+
+  it("a restarted companion (fresh link, no session) learns the position from the next hello re-announce and delivers", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "wowc-link-restart-"));
+    tmpDirs.push(outDir);
+    encodeHelloGrid(outDir, "sess-restart", 6, 1);
+    const gridPath = join(outDir, "frame-0.grid");
+
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: createGridFileSource(gridPath),
+      fs: makeMemoryFs(writes),
+      paths,
+      validWav: new Uint8Array([1]),
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+    });
+    activeLink = link;
+
+    expect(link.status().connected).toBe(false);
+
+    await link.poll();
+    await link.idle();
+
+    expect(link.status().connected).toBe(true);
+    const deliverWrites = writes.filter((w) => w.path.includes("r.lua"));
+    expect(deliverWrites).toHaveLength(1);
+    expect(deliverWrites[0]?.path).toBe("addons/WoWCompanion_R5/r.lua");
+  });
+
+  it("a same-session hello with slot behind the allocator does not move it or empty signals", async () => {
+    const dir1 = mkdtempSync(join(tmpdir(), "wowc-link-behind-1-"));
+    tmpDirs.push(dir1);
+    encodeHelloGrid(dir1, "sess-a", 5, 1);
+    const firstGridPath = join(dir1, "frame-0.grid");
+
+    const dir2 = mkdtempSync(join(tmpdir(), "wowc-link-behind-2-"));
+    tmpDirs.push(dir2);
+    encodeHelloGrid(dir2, "sess-a", 3, 2);
+    const secondGridPath = join(dir2, "frame-0.grid");
+
+    const writes: RecordedWrite[] = [];
+    let useSecond = false;
+    const source = {
+      async next() {
+        const text = readFileSync(useSecond ? secondGridPath : firstGridPath, "utf-8");
+        const parsed = parseCellGridFile(text);
+        return parsed.ok ? parsed.value : undefined;
+      },
+      close(): void {},
+    };
+    const link = createScreenLink({
+      frameSource: source,
+      fs: makeMemoryFs(writes),
+      paths,
+      validWav: new Uint8Array([1]),
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+    });
+    activeLink = link;
+
+    await link.poll();
+    await link.idle();
+    expect(link.status().slotsLeft).toBe(5);
+
+    useSecond = true;
+    const writesBeforeSecond = writes.length;
+    await link.poll();
+    await link.idle();
+
+    expect(link.status().slotsLeft).toBe(4);
+    const newWrites = writes.slice(writesBeforeSecond);
+    const deliverIndex = newWrites.findIndex((w) => w.path.includes("r.lua"));
+    expect(newWrites.slice(0, deliverIndex).some((w) => w.path.startsWith("sig/"))).toBe(false);
+    expect(newWrites).toHaveLength(2);
+    const ackWrite = newWrites[deliverIndex];
+    expect(ackWrite?.path).toBe("addons/WoWCompanion_R5/r.lua");
+  });
+
+  it("a same-session hello with slot ahead of the allocator re-syncs", async () => {
+    const dir1 = mkdtempSync(join(tmpdir(), "wowc-link-ahead-1-"));
+    tmpDirs.push(dir1);
+    encodeHelloGrid(dir1, "sess-a", 1, 1);
+    const firstGridPath = join(dir1, "frame-0.grid");
+
+    const dir2 = mkdtempSync(join(tmpdir(), "wowc-link-ahead-2-"));
+    tmpDirs.push(dir2);
+    encodeHelloGrid(dir2, "sess-a", 8, 2);
+    const secondGridPath = join(dir2, "frame-0.grid");
+
+    const writes: RecordedWrite[] = [];
+    let useSecond = false;
+    const source = {
+      async next() {
+        const text = readFileSync(useSecond ? secondGridPath : firstGridPath, "utf-8");
+        const parsed = parseCellGridFile(text);
+        return parsed.ok ? parsed.value : undefined;
+      },
+      close(): void {},
+    };
+    const link = createScreenLink({
+      frameSource: source,
+      fs: makeMemoryFs(writes),
+      paths,
+      validWav: new Uint8Array([1]),
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+    });
+    activeLink = link;
+
+    await link.poll();
+    await link.idle();
+    expect(link.status().slotsLeft).toBe(9);
+
+    useSecond = true;
+    const writesBeforeSecond = writes.length;
+    await link.poll();
+    await link.idle();
+
+    expect(link.status().slotsLeft).toBe(2);
+    const resetPaths = writes
+      .slice(writesBeforeSecond)
+      .filter((w) => w.path.startsWith("sig/"))
+      .map((w) => w.path);
+    expect(resetPaths).toContain("sig/9.wav");
+    const ackWrite = writes.slice(writesBeforeSecond).find((w) => w.path.includes("r.lua"));
+    expect(ackWrite?.path).toBe("addons/WoWCompanion_R7/r.lua");
+  });
 });
 
 describe("link.batch", () => {

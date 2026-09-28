@@ -32,10 +32,14 @@ local chunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
 chunk("WoWCompanion", ns)
 
 local timerCallbacks = _G.WOWC_TEST_TIMER_CALLBACKS
-assert(timerCallbacks ~= nil and #timerCallbacks == 2, "repaint and slot-poll timers registered at load")
+assert(
+  timerCallbacks ~= nil and #timerCallbacks == 3,
+  "repaint, slot-poll and hello-announce timers registered at load"
+)
 
 local repaintCursor = 1
 local pollCursor = 2
+local helloCursor = 3
 
 local function tickRepaint()
   local entry = timerCallbacks[repaintCursor]
@@ -47,6 +51,12 @@ local function tickPoll()
   local entry = timerCallbacks[pollCursor]
   entry.callback()
   pollCursor = #timerCallbacks
+end
+
+local function tickHello()
+  local entry = timerCallbacks[helloCursor]
+  entry.callback()
+  helloCursor = #timerCallbacks
 end
 
 do
@@ -84,6 +94,20 @@ do
   local before = #paintCalls
   tickRepaint()
   assert(#paintCalls == before, "acking hello stops its re-paint")
+end
+
+do
+  local before = #paintCalls
+  tickHello()
+  assert(#paintCalls == before + 1, "the hello-announce timer re-sends hello on its interval after an ack")
+  assert(paintCalls[#paintCalls].tbl.t == "hello", "the re-announce is a hello")
+
+  local reannouncedSeq = paintCalls[#paintCalls].seq
+  local beforeSecondTick = #paintCalls
+  tickHello()
+  assert(#paintCalls == beforeSecondTick, "a second interval tick does not queue another hello while one is still in flight")
+
+  WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = reannouncedSeq } })
 end
 
 do
@@ -276,6 +300,40 @@ do
     "gen-r2-1: even with the same math.random seed and the same whole-second server time on both "
       .. "loads (the worst case, an unseeded client RNG reset every reload), a fresh debugprofilestop/"
       .. "GetTime reading still changes the session token"
+  )
+end
+
+do
+  local encodeCalls = {}
+  local fakeCodecForSeq = {
+    encode = function(tbl, seq)
+      table.insert(encodeCalls, seq)
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function() end,
+  }
+
+  _G.WOWC_TEST_TIME = 5000
+  local firstNs = {}
+  firstNs.Codec = fakeCodecForSeq
+  local firstChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  firstChunk("WoWCompanion", firstNs)
+  local firstSeq = encodeCalls[#encodeCalls]
+
+  _G.WOWC_TEST_TIME = 5000
+  local secondNs = {}
+  secondNs.Codec = fakeCodecForSeq
+  local secondChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  secondChunk("WoWCompanion", secondNs)
+  local secondSeq = encodeCalls[#encodeCalls]
+
+  assert(
+    firstSeq ~= secondSeq,
+    "aca-r2-10: nextFrameSeq's starting value is not derived from time() alone -- two loads with an "
+      .. "identical time() reading still start their frame seq differently"
   )
 end
 

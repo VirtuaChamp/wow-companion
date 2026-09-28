@@ -37,6 +37,7 @@ export type SlotAllocator = {
   left(): number;
   reset(): void;
   setNext(index: number): void;
+  position(): number;
 };
 
 export function createSlotAllocator(slotCount: number = SLOT_COUNT): SlotAllocator {
@@ -58,6 +59,9 @@ export function createSlotAllocator(slotCount: number = SLOT_COUNT): SlotAllocat
     },
     setNext(index: number): void {
       used = Math.max(0, Math.min(index, slotCount));
+    },
+    position(): number {
+      return used;
     },
   };
 }

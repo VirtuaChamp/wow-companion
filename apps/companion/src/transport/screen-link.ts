@@ -191,14 +191,18 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     frameSeq: number,
   ): Promise<void> {
     build = msg.build;
-    if (msg.session !== session) {
+    const isNewSession = msg.session !== session;
+    if (isNewSession) {
       frameBuf = undefined;
     }
     session = msg.session;
     helloSeen = true;
     const targetIndex = Math.max(0, msg.slot - 1);
-    allocator.setNext(targetIndex);
-    await resetSignalsFrom(targetIndex);
+    const isAheadOfAllocator = targetIndex > allocator.position();
+    if (isNewSession || isAheadOfAllocator) {
+      allocator.setNext(targetIndex);
+      await resetSignalsFrom(targetIndex);
+    }
     pending.unshift({ t: "ack", seq: frameSeq });
     scheduleFlush();
   }
