@@ -21,7 +21,15 @@ export type {
   Upgrade,
   Waypoint,
 } from "./types.ts";
-export { parseCompanionToGame, parseGameToCompanion, parseSnapshot } from "./parse.ts";
+export {
+  isEffort,
+  isProviderId,
+  parseCompanionToGame,
+  parseGameToCompanion,
+  parseItemsRequest,
+  parseSnapshot,
+  parseWaypointRequest,
+} from "./parse.ts";
 export { createMemoryLink } from "./memory-link.ts";
 export type {
   GetStateResponse,

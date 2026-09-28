@@ -394,4 +394,115 @@ do
   )
 end
 
+do
+  local paintCallsC = {}
+  local fakeCodecC = {
+    encode = function(tbl, seq)
+      if tbl.t == "hello" then
+        return { { seq = seq, tbl = tbl } }, nil
+      end
+      if tbl.big then
+        return nil, "too_large"
+      end
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    encodeJson = function(value)
+      return string.rep("x", value.size)
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function(cells)
+      table.insert(paintCallsC, cells)
+    end,
+  }
+  local nsC = {}
+  nsC.Codec = fakeCodecC
+  local chunkC = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  chunkC("WoWCompanion", nsC)
+  local paintsBefore = #paintCallsC
+
+  printed = {}
+  local seq, err = nsC.Transport.send({
+    t = "state",
+    seq = 1,
+    big = true,
+    delta = { quests = { size = 20000 }, bags = { size = 300 }, money = { size = 3 } },
+  })
+  assert(seq == nil and err == "too_large", "too-large state is refused with too_large")
+  assert(#printed == 1, "one line is printed for a refused state, got " .. #printed)
+  assert(printed[1]:find("state", 1, true), "the line names the message type")
+  assert(printed[1]:find("quests", 1, true), "the line names the top-level key that is too large")
+  assert(not printed[1]:find("bags", 1, true), "only the offending key is named")
+
+  printed = {}
+  seq, err = nsC.Transport.send({ t = "ask", id = "a1", chat = "default", text = "x", mentions = {}, big = true })
+  assert(seq == nil and err == "too_large", "too-large ask is refused with too_large")
+  assert(#printed == 1 and printed[1]:find("ask", 1, true), "the line names the ask type")
+  assert(#paintCallsC == paintsBefore, "nothing is painted for a refused payload")
+
+  printed = {}
+  seq = nsC.Transport.send({ t = "state", seq = 2, delta = { money = { size = 3 } } })
+  assert(seq ~= nil and #printed == 0, "a payload within the limit is sent and prints nothing")
+end
+
+do
+  local paintCallsD = {}
+  local fakeCodecD = {
+    encode = function(tbl, seq)
+      if tbl.big then
+        return nil, "too_large"
+      end
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    encodeJson = function(value)
+      return string.rep("x", value.size)
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function(cells)
+      table.insert(paintCallsD, cells)
+    end,
+  }
+  local nsD = {}
+  nsD.Codec = fakeCodecD
+  local chunkD = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  chunkD("WoWCompanion", nsD)
+
+  local acked = 0
+  nsD.Transport.onHelloAcked(function()
+    acked = acked + 1
+  end)
+  local helloSeq = paintCallsD[1].seq
+  WoWCompanion_Deliver(nsD.Transport.session(), { { t = "ack", seq = helloSeq } })
+  assert(acked == 1, "the hello-acked handler runs once when the hello is acked")
+  WoWCompanion_Deliver(nsD.Transport.session(), { { t = "ack", seq = helloSeq } })
+  assert(acked == 1, "a repeated ack does not run the handler again")
+
+  printed = {}
+  local bigState = { t = "state", seq = 1, big = true, delta = { quests = { size = 20000 } } }
+  for _ = 1, 3 do
+    local seq, err = nsD.Transport.send(bigState)
+    assert(seq == nil and err == "too_large", "a too-large state is refused every time")
+  end
+  assert(#printed == 1, "the too-large line is printed once per message description, got " .. #printed)
+  local seqAsk = nsD.Transport.send({ t = "ask", id = "a", chat = "c", text = "x", mentions = {}, big = true })
+  assert(seqAsk == nil and #printed == 2, "a different message type prints its own line once")
+
+  local cmdSeq = nsD.Transport.send({ t = "cmd", chat = "c", name = "new" })
+  assert(cmdSeq ~= nil, "a cmd becomes the current entry")
+  local queuedSeq = nsD.Transport.send({ t = "state", seq = 2, delta = { money = { size = 1 } } })
+  assert(queuedSeq ~= nil, "a valid state queues behind the cmd")
+  local refusedSeq, refusedErr =
+    nsD.Transport.send({ t = "state", seq = 3, big = true, delta = { quests = { size = 20000 } } })
+  assert(refusedSeq == nil and refusedErr == "too_large", "the too-large state is refused")
+  WoWCompanion_Deliver(nsD.Transport.session(), { { t = "ack", seq = cmdSeq } })
+  local lastPainted = paintCallsD[#paintCallsD]
+  assert(
+    lastPainted.tbl.t == "state" and lastPainted.tbl.seq == 2,
+    "a refused state does not drop the earlier valid queued state"
+  )
+end
+
 realPrint("inbox: all assertions passed")

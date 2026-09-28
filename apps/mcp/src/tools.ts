@@ -16,7 +16,7 @@ import type { LocalApi } from "./local-api.ts";
 const GEAR_CANDIDATE_LIMIT = 25;
 const PER_SLOT_CANDIDATE_LIMIT = 5;
 
-export type GearSuggestion = { upgrades: Upgrade[]; missingItemIds: number[] };
+type GearSuggestion = { upgrades: Upgrade[]; missingItemIds: number[] };
 
 export type Tools = {
   getGameState(): Promise<Result<Snapshot, ToolError>>;

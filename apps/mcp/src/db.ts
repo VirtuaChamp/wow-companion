@@ -18,7 +18,7 @@ export function closeDb(db: Db): void {
   db.close();
 }
 
-export type Spawn = {
+type Spawn = {
   zoneId: number;
   uiMapId: number | undefined;
   x: number | undefined;

@@ -9,7 +9,7 @@ import type {
   Result,
 } from "@wow-companion/contracts";
 import { minimalEnv } from "./codex.ts";
-import { runProcess, type RunOutcome, type SpawnLine } from "./spawn.ts";
+import { type RunOutcome, type SpawnLine } from "./spawn.ts";
 import { cleanupRunDir, safeRunDir } from "./run-dir.ts";
 
 type RunFn = (
@@ -282,10 +282,3 @@ export function createCursorWith(
     return provider;
   };
 }
-
-export const createCursor: CreateProvider = createCursorWith(
-  runProcess,
-  defaultCheckInstalled,
-  defaultListModels,
-  false,
-);

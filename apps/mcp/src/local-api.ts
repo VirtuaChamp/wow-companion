@@ -26,6 +26,25 @@ function requestFailed<T>(): Result<T, ToolError> {
   return { ok: false, error: "not_connected" };
 }
 
+function errorForStatus(status: number): ToolError | undefined {
+  switch (status) {
+    case 400:
+    case 404:
+    case 405:
+      return "bad_request";
+    case 403:
+      return "forbidden";
+    case 413:
+      return "too_large";
+    case 415:
+      return "unsupported_media_type";
+    case 500:
+      return "daemon_error";
+    default:
+      return undefined;
+  }
+}
+
 function isTimeoutError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "TimeoutError";
 }
@@ -54,6 +73,8 @@ export function createLocalApi(config: LocalApiConfig): LocalApi {
           headers: { [X_WOWC_RUN_HEADER]: config.runId },
           signal: AbortSignal.timeout(requestTimeoutMs),
         });
+        const statusError = errorForStatus(response.status);
+        if (statusError !== undefined) return { ok: false, error: statusError };
         const body = await response.json();
         const parsed = parseGetStateResponse(body);
         if (!parsed.ok) {
@@ -73,6 +94,8 @@ export function createLocalApi(config: LocalApiConfig): LocalApi {
           { ids: Array.from(ids) },
           AbortSignal.timeout(itemsTimeoutMs),
         );
+        const statusError = errorForStatus(response.status);
+        if (statusError !== undefined) return { ok: false, error: statusError };
         const body = await response.json();
         const parsed = parsePostItemsResponse(body);
         if (!parsed.ok) {
@@ -94,6 +117,8 @@ export function createLocalApi(config: LocalApiConfig): LocalApi {
           AbortSignal.timeout(requestTimeoutMs),
         );
         if (response.status === 409) return { ok: false, error: "no_active_ask" };
+        const statusError = errorForStatus(response.status);
+        if (statusError !== undefined) return { ok: false, error: statusError };
         const body = await response.json();
         const parsed = parsePostWaypointResponse(body);
         if (!parsed.ok) {

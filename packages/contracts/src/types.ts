@@ -10,7 +10,16 @@ export type ProviderError =
   | "timeout"
   | "cancelled";
 export type LinkError = "too_large" | "slots_exhausted";
-export type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
+export type ToolError =
+  | "not_connected"
+  | "item_timeout"
+  | "no_active_ask"
+  | "no_waypoint_map"
+  | "too_large"
+  | "forbidden"
+  | "unsupported_media_type"
+  | "bad_request"
+  | "daemon_error";
 export type ErrorCode =
   | ProviderError
   | LinkError
