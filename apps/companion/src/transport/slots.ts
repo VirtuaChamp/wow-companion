@@ -87,13 +87,14 @@ export async function writeSlot(
   if (!content.ok) {
     return content;
   }
-  const slot = allocator.next();
-  if (!slot.ok) {
-    return slot;
+  if (allocator.left() === 0) {
+    return { ok: false, error: "slots_exhausted" };
   }
-  await fs.writeFile(paths.addonDeliverFile(slot.value), content.value);
-  await fs.writeFile(paths.signalFile(slot.value), validWav);
-  return { ok: true, value: slot.value };
+  const slotIndex = allocator.position();
+  await fs.writeFile(paths.addonDeliverFile(slotIndex), content.value);
+  await fs.writeFile(paths.signalFile(slotIndex), validWav);
+  allocator.next();
+  return { ok: true, value: slotIndex };
 }
 
 function writeUint32LE(view: DataView, offset: number, value: number): void {

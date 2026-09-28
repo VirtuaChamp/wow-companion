@@ -70,6 +70,8 @@ function createAsyncQueue(): {
 
 const ACKED_TYPES = new Set(["ask", "items", "cmd", "hello"]);
 
+type WrittenEntry = { slot: number; msg: CompanionToGame };
+
 function isProgress(msg: CompanionToGame): msg is Extract<CompanionToGame, { t: "progress" }> {
   return msg.t === "progress";
 }
@@ -99,9 +101,24 @@ export type ScreenLink = GameLink & {
 const DEFAULT_POLL_INTERVAL_MS = 150;
 const DEFAULT_SLOT_READ_MS = 250;
 const DEFAULT_CONNECTED_TIMEOUT_MS = 5000;
+const SESSION_LENGTH = 17;
 
 function defaultDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAck(msg: CompanionToGame): msg is Extract<CompanionToGame, { t: "ack" }> {
+  return msg.t === "ack";
+}
+
+function withoutSupersededProgress(msgs: readonly CompanionToGame[]): CompanionToGame[] {
+  return msgs.filter(
+    (msg, index) =>
+      !isProgress(msg) ||
+      !msgs.some(
+        (later, laterIndex) => laterIndex > index && isProgress(later) && later.id === msg.id,
+      ),
+  );
 }
 
 export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
@@ -121,8 +138,17 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   let lastFrameAt: number | undefined;
   const allocator: SlotAllocator = createSlotAllocator(slotCount);
   const pending: CompanionToGame[] = [];
+  let held: CompanionToGame[] = [];
+  let written: WrittenEntry[] = [];
+  let awaitingPostAckFrame = false;
+  let resyncing = false;
+  let exhaustedUntilResync = false;
   let flushing: Promise<void> | undefined;
   let closed = false;
+
+  function sizingSession(): string {
+    return session.length >= SESSION_LENGTH ? session : "x".repeat(SESSION_LENGTH);
+  }
 
   async function resetSignalsFrom(startIndex: number): Promise<void> {
     const writes: Promise<void>[] = [];
@@ -137,7 +163,14 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   }
 
   function scheduleFlush(): void {
-    if (flushing !== undefined || pending.length === 0 || closed || !helloSeen) {
+    if (
+      flushing !== undefined ||
+      pending.length === 0 ||
+      closed ||
+      !helloSeen ||
+      resyncing ||
+      exhaustedUntilResync
+    ) {
       return;
     }
     flushing = Promise.resolve()
@@ -181,8 +214,22 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
         return;
       }
       pending.unshift(...batch);
+      exhaustedUntilResync = true;
       config.onCaptureError?.(new Error(`slots.write: ${result.error}`));
       return;
+    }
+    for (const m of batch) {
+      if (!isAck(m)) {
+        written.push({ slot: result.value, msg: m });
+      }
+    }
+  }
+
+  function releaseHeld(): void {
+    awaitingPostAckFrame = false;
+    if (held.length > 0) {
+      pending.push(...held);
+      held = [];
     }
   }
 
@@ -190,20 +237,51 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     msg: Extract<GameToCompanion, { t: "hello" }>,
     frameSeq: number,
   ): Promise<void> {
-    build = msg.build;
     const isNewSession = msg.session !== session;
-    if (isNewSession) {
-      frameBuf = undefined;
+    const targetIndex = Math.max(0, msg.slot - 1);
+    const needsResync = isNewSession || targetIndex > allocator.position();
+    const isAgain = msg.again === true;
+
+    if (!needsResync) {
+      written = written.filter((entry) => entry.slot >= targetIndex);
+      build = msg.build;
+      helloSeen = true;
+      if (!isAgain) {
+        pending.unshift({ t: "ack", seq: frameSeq });
+        scheduleFlush();
+      }
+      return;
     }
+
+    resyncing = true;
+    while (flushing !== undefined) {
+      await flushing;
+    }
+
+    const requeued = isNewSession ? written.map((entry) => entry.msg) : [];
+    written = isNewSession ? [] : written.filter((entry) => entry.slot >= targetIndex);
+    const carriedAcks = isNewSession ? [] : pending.filter(isAck);
+    const carriedOthers = pending.filter((m) => !isAck(m));
+    pending.length = 0;
+    pending.push(...carriedAcks);
+    held = withoutSupersededProgress([...held, ...requeued, ...carriedOthers]);
+
+    build = msg.build;
     session = msg.session;
     helloSeen = true;
-    const targetIndex = Math.max(0, msg.slot - 1);
-    const isAheadOfAllocator = targetIndex > allocator.position();
-    if (isNewSession || isAheadOfAllocator) {
-      allocator.setNext(targetIndex);
-      await resetSignalsFrom(targetIndex);
+    allocator.setNext(targetIndex);
+    await resetSignalsFrom(targetIndex);
+    exhaustedUntilResync = false;
+    if (isNewSession) {
+      frameBuf = { seq: frameSeq, complete: true };
     }
-    pending.unshift({ t: "ack", seq: frameSeq });
+    if (isAgain) {
+      releaseHeld();
+    } else {
+      pending.push({ t: "ack", seq: frameSeq });
+      awaitingPostAckFrame = true;
+    }
+    resyncing = false;
     scheduleFlush();
   }
 
@@ -245,10 +323,15 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       return;
     }
     const msg = message.value;
+    const showsAckWasRead = awaitingPostAckFrame && !(msg.t === "hello" && msg.again !== true);
     if (msg.t === "hello") {
       await handleHello(msg, frameSeq);
     } else if (ACKED_TYPES.has(msg.t)) {
       pending.push({ t: "ack", seq: frameSeq });
+      scheduleFlush();
+    }
+    if (showsAckWasRead) {
+      releaseHeld();
       scheduleFlush();
     }
     queue.push(msg);
@@ -272,22 +355,23 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       return queue.iterable;
     },
     send(msg: CompanionToGame): Result<void, LinkError> {
-      const size = messageByteSize(session, msg);
+      const size = messageByteSize(sizingSession(), msg);
       if (size > 64 * 1024) {
         return { ok: false, error: "too_large" };
       }
       if (allocator.left() === 0) {
         return { ok: false, error: "slots_exhausted" };
       }
+      const target = resyncing || awaitingPostAckFrame ? held : pending;
       if (isProgress(msg)) {
-        for (let i = pending.length - 1; i >= 0; i -= 1) {
-          const entry = pending[i];
+        for (let i = target.length - 1; i >= 0; i -= 1) {
+          const entry = target[i];
           if (entry !== undefined && isProgress(entry) && entry.id === msg.id) {
-            pending.splice(i, 1);
+            target.splice(i, 1);
           }
         }
       }
-      pending.push(msg);
+      target.push(msg);
       scheduleFlush();
       return { ok: true, value: undefined };
     },
@@ -306,7 +390,10 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       config.frameSource.close();
     },
     async idle(): Promise<void> {
-      while (flushing !== undefined || (pending.length > 0 && helloSeen)) {
+      while (
+        flushing !== undefined ||
+        (pending.length > 0 && helloSeen && !exhaustedUntilResync && !resyncing)
+      ) {
         await flushing;
         await Promise.resolve();
       }

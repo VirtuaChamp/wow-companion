@@ -10,7 +10,7 @@ local SLOT_WARNING_THRESHOLD = 20
 local HELLO_INTERVAL_SECONDS = 10
 local ACKED_TYPES = { ask = true, items = true, cmd = true, hello = true }
 
-local function makeSessionToken()
+local function computeEntropyMix()
   local serverTime = GetServerTime and GetServerTime() or 0
   local profileStop = debugprofilestop and math.floor(debugprofilestop()) or 0
   local frac = 0
@@ -20,11 +20,12 @@ local function makeSessionToken()
   end
   local mixed = bit.bxor(bit.band(serverTime, 0x7fffffff), bit.band(profileStop, 0x7fffffff))
   mixed = bit.bxor(mixed, bit.band(frac, 0x7fffffff))
-  return ("%08x-%08x"):format(bit.band(mixed, 0x7fffffff), math.random(0, 0x7fffffff))
+  return mixed
 end
 
-local session = makeSessionToken()
-local nextFrameSeq = math.random(0, 0xffff)
+local entropyMix = computeEntropyMix()
+local session = ("%08x-%08x"):format(bit.band(entropyMix, 0x7fffffff), math.random(0, 0x7fffffff))
+local nextFrameSeq = bit.band(entropyMix, 0xffff)
 local sendQueue = {}
 local current = nil
 local messageHandlers = {}
@@ -32,6 +33,7 @@ local nextSlotIndex = 1
 local exhausted = false
 local lowWarned = false
 local slotFailWarned = {}
+local helloSeqsInFlight = {}
 
 local function slotAddonName(index)
   return ("WoWCompanion_R%03d"):format(index)
@@ -81,7 +83,11 @@ local function nextSeq()
   return seq
 end
 
-local function buildHelloEntry()
+local function registerHelloSeq(seq)
+  helloSeqsInFlight[seq] = true
+end
+
+local function buildHelloEntry(again)
   local version, build, _, tocversion = GetBuildInfo()
   local tbl = {
     t = "hello",
@@ -91,18 +97,34 @@ local function buildHelloEntry()
     session = session,
     slot = nextSlotIndex,
   }
+  if again then
+    tbl.again = true
+  end
   local seq = nextSeq()
   local frames, err = ns.Codec.encode(tbl, seq)
   if not frames then
     return nil, err
   end
-  return { seq = seq, frames = frames, t = "hello", neverGivesUp = true, slotAtSend = nextSlotIndex }
+  local entry = { seq = seq, frames = frames, t = "hello", again = again or false }
+  if not again then
+    entry.neverGivesUp = true
+    entry.slotAtSend = nextSlotIndex
+  end
+  return entry
 end
 
 local function tryAck(seq)
-  if not current or current.seq ~= seq then
+  if not current then
     return
   end
+  if current.t == "hello" then
+    if current.again or not helloSeqsInFlight[seq] then
+      return
+    end
+  elseif current.seq ~= seq then
+    return
+  end
+  helloSeqsInFlight = {}
   current = nil
   local nextEntry = table.remove(sendQueue, 1)
   if nextEntry then
@@ -175,11 +197,12 @@ local function repaintTick()
     current.frameIndex = current.frameIndex + 1
     if current.frameIndex > #current.frames then
       current.frameIndex = 1
-      if ACKED_TYPES[current.t] then
+      if ACKED_TYPES[current.t] and not current.again then
         if current.neverGivesUp then
           if nextSlotIndex ~= current.slotAtSend then
-            local entry = buildHelloEntry()
+            local entry = buildHelloEntry(false)
             if entry then
+              registerHelloSeq(entry.seq)
               entry.frameIndex = 1
               current = entry
             end
@@ -219,7 +242,7 @@ local function announceHello()
   if hasQueuedHello() then
     return
   end
-  local entry, err = buildHelloEntry()
+  local entry, err = buildHelloEntry(true)
   if entry then
     if current then
       table.insert(sendQueue, entry)
@@ -264,8 +287,9 @@ local function pollNextSlot()
 end
 
 do
-  local entry, err = buildHelloEntry()
+  local entry, err = buildHelloEntry(false)
   if entry then
+    registerHelloSeq(entry.seq)
     startCurrent(entry)
   else
     print("WoW Companion: failed to encode hello: " .. tostring(err))

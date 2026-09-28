@@ -99,15 +99,20 @@ end
 do
   local before = #paintCalls
   tickHello()
-  assert(#paintCalls == before + 1, "the hello-announce timer re-sends hello on its interval after an ack")
+  assert(#paintCalls == before + 1, "the hello-announce timer re-sends hello on its interval")
   assert(paintCalls[#paintCalls].tbl.t == "hello", "the re-announce is a hello")
+  assert(paintCalls[#paintCalls].tbl.again == true, "the re-announce is marked again")
 
-  local reannouncedSeq = paintCalls[#paintCalls].seq
   local beforeSecondTick = #paintCalls
   tickHello()
   assert(#paintCalls == beforeSecondTick, "a second interval tick does not queue another hello while one is still in flight")
 
-  WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = reannouncedSeq } })
+  local beforeRepaint = #paintCalls
+  tickRepaint()
+  assert(
+    #paintCalls == beforeRepaint,
+    "an again hello is never held or repainted for an ack; it advances on its own after one pass"
+  )
 end
 
 do
@@ -316,14 +321,22 @@ do
     paint = function() end,
   }
 
+  math.randomseed(1)
   _G.WOWC_TEST_TIME = 5000
+  _G.WOWC_TEST_SERVER_TIME = 2000
+  _G.WOWC_TEST_PROFILE_STOP = 900
+  _G.WOWC_TEST_GAME_TIME = 3.5
   local firstNs = {}
   firstNs.Codec = fakeCodecForSeq
   local firstChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
   firstChunk("WoWCompanion", firstNs)
   local firstSeq = encodeCalls[#encodeCalls]
 
+  math.randomseed(1)
   _G.WOWC_TEST_TIME = 5000
+  _G.WOWC_TEST_SERVER_TIME = 2000
+  _G.WOWC_TEST_PROFILE_STOP = 900.3
+  _G.WOWC_TEST_GAME_TIME = 3.9
   local secondNs = {}
   secondNs.Codec = fakeCodecForSeq
   local secondChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
@@ -334,6 +347,50 @@ do
     firstSeq ~= secondSeq,
     "aca-r2-10: nextFrameSeq's starting value is not derived from time() alone -- two loads with an "
       .. "identical time() reading still start their frame seq differently"
+  )
+end
+
+do
+  local paintCallsB = {}
+  local fakeCodecB = {
+    encode = function(tbl, seq)
+      return { { seq = seq, tbl = tbl } }, nil
+    end,
+    render = function(frame)
+      return frame
+    end,
+    paint = function(cells)
+      table.insert(paintCallsB, cells)
+    end,
+  }
+  local nsB = {}
+  nsB.Codec = fakeCodecB
+  local chunkB = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
+  chunkB("WoWCompanion", nsB)
+
+  local allCallbacks = _G.WOWC_TEST_TIMER_CALLBACKS
+  local nB = #allCallbacks
+  local repaintIndexB = nB - 2
+  local pollIndexB = nB - 1
+
+  assert(#paintCallsB == 1, "aca-r3-5: fresh load paints hello once")
+  local firstSeq = paintCallsB[1].seq
+
+  local sigPathB = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\001.wav"
+  _G.WOWC_TEST_SET_SIGNAL(sigPathB, "RIFF")
+  allCallbacks[pollIndexB].callback()
+
+  allCallbacks[repaintIndexB].callback()
+  repaintIndexB = #allCallbacks
+  assert(#paintCallsB == 2, "aca-r3-5: the hello is rebuilt after the slot position changes")
+  assert(paintCallsB[2].seq ~= firstSeq, "aca-r3-5: the rebuild uses a fresh seq")
+
+  WoWCompanion_Deliver(nsB.Transport.session(), { { t = "ack", seq = firstSeq } })
+  local beforeB = #paintCallsB
+  allCallbacks[repaintIndexB].callback()
+  assert(
+    #paintCallsB == beforeB,
+    "aca-r3-5: an ack for the first seq issued still stops the current (rebuilt) hello's re-paint"
   )
 end
 

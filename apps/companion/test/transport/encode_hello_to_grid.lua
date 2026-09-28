@@ -2,6 +2,7 @@ local outDir = (assert(arg[1], "usage: encode_hello_to_grid.lua <outDir> <sessio
 local session = (assert(arg[2], "usage: encode_hello_to_grid.lua <outDir> <session> <slot> [seq]"))
 local slot = tonumber((assert(arg[3], "usage: encode_hello_to_grid.lua <outDir> <session> <slot> [seq]")))
 local seq = tonumber(arg[4] or "0")
+local again = arg[5] == "again"
 
 local scriptDir = "tests/lua/codec/"
 local loadCodec = dofile(scriptDir .. "load_codec.lua")
@@ -15,6 +16,9 @@ local message = {
   session = session,
   slot = slot,
 }
+if again then
+  message.again = true
+end
 
 local frames, err = Codec.encode(message, seq)
 if not frames then

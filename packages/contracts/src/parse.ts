@@ -347,6 +347,8 @@ export function parseItemDetailArray(value: unknown): ItemDetail[] | undefined {
   return parseArrayField(value, parseItemDetail);
 }
 
+const HELLO_SESSION_PATTERN = /^[A-Za-z0-9_-]{1,17}$/;
+
 function parseHello(
   value: Record<string, unknown>,
 ): Extract<GameToCompanion, { t: "hello" }> | undefined {
@@ -355,10 +357,11 @@ function parseHello(
     !isString(value.build) ||
     !isNumber(value.iface) ||
     !isString(value.session) ||
+    !HELLO_SESSION_PATTERN.test(value.session) ||
     !isNumber(value.slot)
   )
     return undefined;
-  return {
+  const msg: Extract<GameToCompanion, { t: "hello" }> = {
     t: "hello",
     v: 1,
     build: value.build,
@@ -366,6 +369,11 @@ function parseHello(
     session: value.session,
     slot: value.slot,
   };
+  if (value.again !== undefined) {
+    if (value.again !== true) return undefined;
+    msg.again = true;
+  }
+  return msg;
 }
 
 function parseStateMessage(
