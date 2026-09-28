@@ -5,6 +5,7 @@ export type ProviderError =
   | "provider_missing"
   | "provider_auth"
   | "provider_disabled"
+  | "provider_failed"
   | "session_unknown"
   | "timeout"
   | "cancelled";
@@ -120,7 +121,12 @@ export interface GameLink {
   status(): { connected: boolean; build?: string; slotsLeft: number; badFrames: number };
 }
 
-export type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number };
+export type ProviderConfig = {
+  cwd: string;
+  mcp: (runId: string) => McpLaunch;
+  timeoutMs: number;
+  models: readonly string[];
+};
 export interface Provider {
   id: ProviderId;
   describe(): Promise<{
@@ -146,5 +152,5 @@ export interface Provider {
 export type CreateProvider = (config: ProviderConfig) => Provider;
 export type ProviderEvent =
   | { kind: "text"; delta: string }
-  | { kind: "tool"; name: string }
+  | { kind: "tool"; name: string; failure?: string }
   | { kind: "session"; id: string };
