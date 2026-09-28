@@ -142,6 +142,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   let written: WrittenEntry[] = [];
   let awaitingPostAckFrame = false;
   let resyncing = false;
+  let emptiedAfterFailure: { session: string; floor: number } | undefined;
   let exhaustedUntilResync = false;
   let flushing: Promise<void> | undefined;
   let closed = false;
@@ -165,14 +166,18 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     return allEmptied;
   }
 
-  async function resetSignalsUntilEmpty(startIndex: number): Promise<boolean> {
+  async function resetSignalsUntilEmpty(
+    startIndex: number,
+  ): Promise<"clean" | "recovered" | "closed"> {
+    let failed = false;
     while (!closed) {
       if (await resetSignalsFrom(startIndex)) {
-        return true;
+        return failed ? "recovered" : "clean";
       }
+      failed = true;
       await delay(slotReadMs);
     }
-    return false;
+    return "closed";
   }
 
   async function firstFreeSlotFrom(startIndex: number): Promise<number | undefined> {
@@ -282,8 +287,15 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     const hadSession = session !== "";
     const isNewSession = msg.session !== session;
     const targetIndex = Math.max(0, msg.slot - 1);
-    const needsResync = isNewSession || targetIndex > allocator.position();
+    const needsResync =
+      isNewSession || targetIndex > allocator.position() || emptiedAfterFailure !== undefined;
     const isAgain = msg.again === true;
+    const emptied = emptiedAfterFailure;
+    if (emptied !== undefined && msg.session === emptied.session && targetIndex < emptied.floor) {
+      return;
+    }
+    const alreadyEmptied =
+      emptied !== undefined && msg.session === emptied.session && targetIndex >= emptied.floor;
 
     if (!needsResync) {
       written = written.filter((entry) => entry.slot >= targetIndex);
@@ -310,15 +322,27 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     held = withoutSupersededProgress([...held, ...requeued, ...carriedOthers]);
 
     let nextIndex: number | undefined;
-    if (hadSession) {
-      const emptied = await resetSignalsUntilEmpty(targetIndex);
-      nextIndex = emptied ? targetIndex : undefined;
+    if (alreadyEmptied) {
+      nextIndex = targetIndex;
+    } else if (hadSession) {
+      emptiedAfterFailure = undefined;
+      const outcome = await resetSignalsUntilEmpty(targetIndex);
+      if (outcome === "closed") {
+        return;
+      }
+      if (outcome === "recovered") {
+        emptiedAfterFailure = { session: msg.session, floor: targetIndex };
+        frameBuf = isAgain ? { seq: frameSeq, complete: true } : undefined;
+        return;
+      }
+      nextIndex = targetIndex;
     } else {
       nextIndex = await firstFreeSlotUntilKnown(targetIndex);
     }
     if (nextIndex === undefined) {
       return;
     }
+    emptiedAfterFailure = undefined;
 
     build = msg.build;
     session = msg.session;

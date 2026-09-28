@@ -283,6 +283,91 @@ describe("link.hello", () => {
     });
   });
 
+  it("never commits a position captured before a failed reset: an again re-sync waits for a hello observed after the successful pass and writes nothing behind the addon", async () => {
+    const landed: RecordedWrite[] = [];
+    let failReset = false;
+    const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
+      async writeFile(path: string, data: string | Uint8Array): Promise<void> {
+        if (failReset && path === "sig/6.wav" && (data as Uint8Array).length === 0) {
+          failReset = false;
+          throw new Error("EBUSY");
+        }
+        landed.push({ path, data });
+      },
+    };
+    const { link, feed } = await startConnected({
+      session: "sess-late-a",
+      delay: instantDelay,
+      fs,
+    });
+    link.send(reply("held-across-advance"));
+    await link.idle();
+    const before = landed.length;
+
+    failReset = true;
+    await feed(encodeHelloGridFile("sess-late-b", 3, 3, true));
+    expect(landed.slice(before).filter((w) => w.path.includes("r.lua"))).toEqual([]);
+
+    await feed(encodeHelloGridFile("sess-late-b", 5, 4, true));
+
+    const delivered = landed
+      .slice(before)
+      .filter((w) => w.path.includes("r.lua"))
+      .map((w) => ({ path: w.path, ...parseSlotContent(w.data as string) }));
+    expect(delivered).toEqual([
+      {
+        path: "addons/WoWCompanion_R4/r.lua",
+        session: "sess-late-b",
+        msgs: [reply("held-across-advance")],
+      },
+    ]);
+  });
+
+  it("a non-again hello whose reset failed commits from the same still-painted frame once it is re-captured, at the position it names", async () => {
+    const landed: RecordedWrite[] = [];
+    let failReset = false;
+    const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
+      async writeFile(path: string, data: string | Uint8Array): Promise<void> {
+        if (failReset && path === "sig/6.wav" && (data as Uint8Array).length === 0) {
+          failReset = false;
+          throw new Error("EBUSY");
+        }
+        landed.push({ path, data });
+      },
+    };
+    const { link, feed } = await startConnected({
+      session: "sess-late-c",
+      delay: instantDelay,
+      fs,
+    });
+    const before = landed.length;
+    const hello = encodeHelloGridFile("sess-late-d", 3, 3);
+
+    failReset = true;
+    await feed(hello);
+    expect(landed.slice(before).filter((w) => w.path.includes("r.lua"))).toEqual([]);
+    await feed(hello);
+
+    const delivered = landed
+      .slice(before)
+      .filter((w) => w.path.includes("r.lua"))
+      .map((w) => ({ path: w.path, ...parseSlotContent(w.data as string) }));
+    expect(delivered).toEqual([
+      {
+        path: "addons/WoWCompanion_R2/r.lua",
+        session: "sess-late-d",
+        msgs: [{ t: "ack", seq: 3 }],
+      },
+    ]);
+    expect(link.status().connected).toBe(true);
+  });
+
   it("a slot whose r.lua was written but whose signal is empty counts as free for a companion adopting a session", async () => {
     const gridPath = encodeHelloGridFile("sess-a", 2, 3);
     const writes: RecordedWrite[] = [
@@ -337,7 +422,9 @@ describe("link.hello", () => {
     const before = landed.length;
 
     failReset = true;
-    await feed(encodeHelloGridFile("sess-reset-b", 1, 3));
+    const helloB = encodeHelloGridFile("sess-reset-b", 1, 3);
+    await feed(helloB);
+    await feed(helloB);
     await feed(encodeHelloGridFile("sess-reset-b", 2, 4, true));
 
     expect(errors.length).toBeGreaterThan(0);
