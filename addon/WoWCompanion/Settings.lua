@@ -5,6 +5,7 @@ ns.Settings = ns.Settings or {}
 local STRINGS = {
   categoryName = "WoW Companion",
   offline = "Companion offline",
+  offlineReason = "Start the WoW Companion desktop app to choose a provider.",
   scopeThisChat = "This chat only",
   scopeThisChatTooltip = "Show and change the provider, model and effort for this chat only, instead of every chat.",
   providerLabel = "AI provider",
@@ -16,6 +17,12 @@ local STRINGS = {
   notInstalledReason = "Not installed",
   disabledReason = "Disabled",
   noModelsReason = "No models listed",
+}
+
+local PROVIDER_NAMES = {
+  claude = "Claude",
+  codex = "Codex",
+  cursor = "Cursor",
 }
 
 local VARIABLES = {
@@ -77,9 +84,20 @@ local function listedValue(list, value)
   return nil
 end
 
-local function displayedChoice()
-  if state.scopeChecked and state.chat then
+local function providerName(id)
+  return PROVIDER_NAMES[id] or id
+end
+
+local function chatChoiceFor(chatId)
+  if chatId ~= nil and state.chat and state.chat.id == chatId then
     return state.chat
+  end
+  return nil
+end
+
+local function displayedChoice()
+  if state.scopeChecked then
+    return chatChoiceFor(state.activeChatId) or state.active
   end
   return state.active
 end
@@ -117,11 +135,11 @@ end
 
 function ns.Settings.providerOptions()
   if not state.online then
-    return textOptions({ { value = "", label = STRINGS.offline, reason = STRINGS.offline } })
+    return textOptions({ { value = "", label = STRINGS.offline, reason = STRINGS.offlineReason } })
   end
   local entries = {}
   for _, provider in ipairs(state.providers) do
-    local entry = { value = provider.id, label = provider.id }
+    local entry = { value = provider.id, label = providerName(provider.id) }
     if not provider.installed then
       entry.reason = provider.reason or STRINGS.notInstalledReason
     elseif not provider.enabled then
@@ -191,31 +209,43 @@ local function notifyPanel()
   lastNotified = display
 end
 
-local function sendChoice(choice)
+local function validatedChoice(choice)
+  local provider = findProvider(choice.provider)
+  if not isUsable(provider) then
+    return nil
+  end
+  return {
+    provider = provider.id,
+    model = listedValue(provider.models, choice.model) or provider.models[1],
+    effort = listedValue(provider.efforts, choice.effort),
+  }
+end
+
+local function sendChoice(requested)
+  local choice = validatedChoice(requested)
+  if not choice then
+    return false
+  end
   local message = { t = "settings", provider = choice.provider, model = choice.model }
-  local includesChat = state.scopeChecked and state.activeChatId ~= nil
+  local chatId = state.scopeChecked and state.activeChatId or nil
   if choice.effort then
     message.effort = choice.effort
   end
-  if includesChat then
-    message.chat = state.activeChatId
+  if chatId then
+    message.chat = chatId
   end
-  state.pending = { provider = choice.provider, model = choice.model, effort = choice.effort, chat = includesChat }
+  state.pending = { provider = choice.provider, model = choice.model, effort = choice.effort, chat = chatId }
   ns.Transport.send(message)
+  return true
 end
 
 function ns.Settings.setProvider(id)
   local provider = findProvider(id)
-  if not isUsable(provider) then
+  local current = provider and provider.current or {}
+  if not sendChoice({ provider = id, model = current.model, effort = current.effort }) then
     Settings.NotifyUpdate(VARIABLES.provider)
     return
   end
-  local current = provider.current or {}
-  sendChoice({
-    provider = provider.id,
-    model = current.model,
-    effort = listedValue(provider.efforts, current.effort),
-  })
   notifyPanel()
 end
 
@@ -226,7 +256,10 @@ function ns.Settings.setModel(model)
     Settings.NotifyUpdate(VARIABLES.model)
     return
   end
-  sendChoice({ provider = provider.id, model = model, effort = choice.effort })
+  if not sendChoice({ provider = provider.id, model = model, effort = choice.effort }) then
+    Settings.NotifyUpdate(VARIABLES.model)
+    return
+  end
   notifyPanel()
 end
 
@@ -237,7 +270,10 @@ function ns.Settings.setEffort(effort)
     Settings.NotifyUpdate(VARIABLES.effort)
     return
   end
-  sendChoice({ provider = provider.id, model = choice.model, effort = effort })
+  if not sendChoice({ provider = provider.id, model = choice.model, effort = effort }) then
+    Settings.NotifyUpdate(VARIABLES.effort)
+    return
+  end
   notifyPanel()
 end
 
@@ -251,23 +287,32 @@ function ns.Settings.setScope(checked)
 end
 
 local function noticeText(choice)
-  return string.format("[Claude] now using %s · %s · %s", choice.provider, choice.model, choice.effort or "unknown")
+  return string.format(
+    "[Claude] now using %s · %s · %s",
+    providerName(choice.provider),
+    choice.model,
+    choice.effort or "unknown"
+  )
 end
 
 local function pendingConfirmedBy(msg)
   if not state.pending then
     return nil
   end
-  local target = state.pending.chat and msg.chat or msg.active
+  local pending = state.pending
+  local target = msg.active
+  if pending.chat then
+    target = msg.chat
+    if not target or target.id ~= pending.chat then
+      return nil
+    end
+  end
   if not target then
     return nil
   end
-  if
-    target.provider == state.pending.provider
-    and target.model == state.pending.model
-    and target.effort == state.pending.effort
-  then
-    return state.pending
+  local effortMatches = pending.effort == nil or target.effort == pending.effort
+  if target.provider == pending.provider and target.model == pending.model and effortMatches then
+    return target
   end
   return nil
 end
@@ -299,12 +344,31 @@ function ns.Settings.onChats(msg)
 end
 
 function ns.Settings.onError(msg)
-  if not state.pending then
+  if msg.code ~= "bad_settings" or not state.pending then
     return
   end
   state.pending = nil
   notifyPanel()
   ns.AiWindow.notice(msg.message)
+end
+
+local function showEntryReason(frame, description, data)
+  MenuUtil.ShowTooltipEx(frame, description:GetTooltipFrame(), function(tooltip)
+    GameTooltip_SetTitle(tooltip, data.label)
+    GameTooltip_AddNormalLine(tooltip, data.disabled, true)
+  end)
+end
+
+local function disableUnavailableEntries(rootDescription)
+  for _, description in rootDescription:EnumerateElementDescriptions() do
+    local data = description:GetData()
+    if data and data.disabled then
+      description:SetEnabled(false)
+      description:HookOnEnter(function(frame)
+        showEntryReason(frame, description, data)
+      end)
+    end
+  end
 end
 
 local function ensureCategory()
@@ -342,6 +406,7 @@ local function ensureCategory()
   )
   local providerInitializer =
     Settings.CreateDropdown(category, providerSetting, ns.Settings.providerOptions, STRINGS.providerTooltip)
+  providerInitializer.customOptionHandler = disableUnavailableEntries
   providerInitializer:AddModifyPredicate(ns.Settings.isOnline)
   providerInitializer:AddEvaluateStateCVar(VARIABLES.hub)
 

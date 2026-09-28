@@ -149,6 +149,7 @@ const companionToGameSamples: CompanionToGame[] = [
   { t: "ack", seq: 5 },
   { t: "error", id: "ask-1", code: "provider_missing", message: "not installed" },
   { t: "error", code: "bad_frame", message: "unparseable" },
+  { t: "error", code: "bad_settings", message: "model not offered" },
 ];
 
 describe("contracts.parse", () => {

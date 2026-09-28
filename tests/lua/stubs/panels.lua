@@ -41,7 +41,14 @@ _G.CreateFrame = function(frameType, name, parent, template)
       return handler(...)
     end)
   end)
-  ensureMethod(frame, "SetPoint", function() end)
+  local baseSetPoint = frame.SetPoint
+  frame.points = {}
+  frame.SetPoint = function(self, point, ...)
+    table.insert(self.points, point)
+    if baseSetPoint then
+      return baseSetPoint(self, point, ...)
+    end
+  end
   ensureMethod(frame, "SetJustifyH", function() end)
   ensureMethod(frame, "ClearAllPoints", function() end)
   ensureMethod(frame, "SetSize", function(self, width, height)
@@ -318,6 +325,58 @@ local function newInitializer(kind, setting, options, tooltip)
   function initializer:AddEvaluateStateCVar(cvar)
     table.insert(self.evaluateStateCVars, cvar)
   end
+  function initializer:BuildMenu()
+    local root = { descriptions = {} }
+    function root:EnumerateElementDescriptions()
+      return ipairs(self.descriptions)
+    end
+    for _, option in ipairs(self:GetOptions()) do
+      local description = { data = option, enabled = true, enterHooks = {} }
+      function description:GetData()
+        return self.data
+      end
+      function description:SetEnabled(enabled)
+        self.enabled = enabled
+      end
+      function description:IsEnabled()
+        return self.enabled
+      end
+      function description:HookOnEnter(callback)
+        table.insert(self.enterHooks, callback)
+      end
+      function description:GetTooltipFrame()
+        return _G.WOWC_TEST_MENU_TOOLTIP
+      end
+      table.insert(root.descriptions, description)
+    end
+    if self.customOptionHandler then
+      self.customOptionHandler(root)
+    end
+    return root
+  end
+  function initializer:PickMenuEntry(value)
+    for _, description in ipairs(self:BuildMenu().descriptions) do
+      if description.data.value == value then
+        if not description.enabled then
+          return false
+        end
+        self.setting:SetValue(value)
+        return true
+      end
+    end
+    return false
+  end
+  function initializer:HoverMenuEntry(value)
+    _G.WOWC_TEST_MENU_TOOLTIP.lines = {}
+    for _, description in ipairs(self:BuildMenu().descriptions) do
+      if description.data.value == value then
+        for _, callback in ipairs(description.enterHooks) do
+          callback({})
+        end
+      end
+    end
+    return _G.WOWC_TEST_MENU_TOOLTIP.lines
+  end
   return initializer
 end
 
@@ -331,6 +390,19 @@ function _G.WOWC_TEST_IsEnabled(variable)
 end
 
 _G.WOWC_TEST_REGISTERED_INITIALIZERS = {}
+
+_G.WOWC_TEST_MENU_TOOLTIP = { lines = {} }
+_G.MenuUtil = {
+  ShowTooltipEx = function(owner, tooltip, func)
+    func(tooltip)
+  end,
+}
+_G.GameTooltip_SetTitle = function(tooltip, text)
+  table.insert(tooltip.lines, "title:" .. text)
+end
+_G.GameTooltip_AddNormalLine = function(tooltip, text)
+  table.insert(tooltip.lines, "line:" .. text)
+end
 
 function _G.Settings.CreateDropdown(category, setting, options, tooltip)
   local initializer = newInitializer("dropdown", setting, options, tooltip)

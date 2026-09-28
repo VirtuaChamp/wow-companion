@@ -55,6 +55,7 @@ const errorCodes = literalsOf<ErrorCode>({
   no_waypoint_map: true,
   busy: true,
   bad_frame: true,
+  bad_settings: true,
 });
 
 function ok<T>(value: T): Result<T, "bad_frame"> {

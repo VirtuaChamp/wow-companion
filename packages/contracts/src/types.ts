@@ -10,7 +10,13 @@ export type ProviderError =
   | "cancelled";
 export type LinkError = "too_large" | "slots_exhausted";
 export type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
-export type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame";
+export type ErrorCode =
+  | ProviderError
+  | LinkError
+  | ToolError
+  | "busy"
+  | "bad_frame"
+  | "bad_settings";
 
 export type Mention =
   | { kind: "quest"; questId: number }

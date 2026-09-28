@@ -70,14 +70,14 @@ local function ensureFrame()
 
   frame.ScrollFrame = CreateFrame("ScrollFrame", nil, frame, "InputScrollFrameTemplate")
   frame.ScrollFrame:SetPoint("TOPLEFT", frame.Instructions, "BOTTOMLEFT", 0, -6)
-  frame.ScrollFrame:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 44)
-  frame.ScrollFrame:SetSize(width - 46, height - 94)
+  local scrollWidth = width - 46
+  frame.ScrollFrame:SetSize(scrollWidth, height - 94)
   frame.ScrollFrame.CharCount:Hide()
 
   local editBox = frame.ScrollFrame.EditBox
   editBox:SetMultiLine(true)
   editBox:SetAutoFocus(false)
-  editBox:SetWidth(frame.ScrollFrame:GetWidth() - 18)
+  editBox:SetWidth(scrollWidth - 18)
   editBox:HookScript("OnTextChanged", function(box)
     if box.reportText and box:GetText() ~= box.reportText then
       box:SetText(box.reportText)

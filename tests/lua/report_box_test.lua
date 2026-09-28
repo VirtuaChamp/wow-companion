@@ -54,6 +54,8 @@ local reportFrame = ns.Report.open()
 assert(reportFrame:IsShown() == true, "report frame is shown")
 assert(reportFrame.TitleText:GetText() ~= "" and reportFrame.TitleText:GetText() ~= nil, "report frame has a title")
 assert(reportFrame.Instructions:GetText() ~= "" and reportFrame.Instructions:GetText() ~= nil, "report frame tells the user what to do with the box (ui-r2-5)")
+assert(#reportFrame.ScrollFrame.points == 1 and reportFrame.ScrollFrame.points[1] == "TOPLEFT", "the scroll box is sized by one anchor and SetSize, never two opposing corners (ui-r3-3)")
+assert(reportFrame.EditBox:GetWidth() == reportFrame.ScrollFrame:GetWidth() - 18, "the edit box is the scroll box's width less the scroll bar allowance")
 assert(reportFrame.ScrollFrame.CharCount:IsShown() == false, "the character counter is hidden (aca-r2-12/ui-r2-1)")
 
 local titledFrameName = reportFrame:GetName()
