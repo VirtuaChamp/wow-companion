@@ -122,7 +122,7 @@ type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "provider_failed" | "session_unknown" | "timeout" | "cancelled";
 type LinkError = "too_large" | "slots_exhausted";
-type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
+type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map" | "too_large" | "forbidden" | "unsupported_media_type" | "bad_request" | "daemon_error"; // local API: 403 forbidden (Host not loopback or an Origin header), 415 unsupported_media_type, 400/404/405 bad_request, 413 too_large, 500 daemon_error (PM decision 2026-09-28)
 type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame" | "bad_settings";
 type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number; models: readonly string[] };
 interface Provider {
