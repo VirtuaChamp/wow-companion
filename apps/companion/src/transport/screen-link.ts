@@ -150,16 +150,58 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     return session.length >= SESSION_LENGTH ? session : "x".repeat(SESSION_LENGTH);
   }
 
-  async function resetSignalsFrom(startIndex: number): Promise<void> {
+  async function resetSignalsFrom(startIndex: number): Promise<boolean> {
+    let allEmptied = true;
     const writes: Promise<void>[] = [];
     for (let i = startIndex; i < slotCount; i += 1) {
       writes.push(
         config.fs.writeFile(config.paths.signalFile(i), config.emptyWav).catch((error) => {
+          allEmptied = false;
           config.onCaptureError?.(error);
         }),
       );
     }
     await Promise.all(writes);
+    return allEmptied;
+  }
+
+  async function resetSignalsUntilEmpty(startIndex: number): Promise<boolean> {
+    while (!closed) {
+      if (await resetSignalsFrom(startIndex)) {
+        return true;
+      }
+      await delay(slotReadMs);
+    }
+    return false;
+  }
+
+  async function firstFreeSlotFrom(startIndex: number): Promise<number | undefined> {
+    let index = startIndex;
+    while (index < slotCount) {
+      let signal: Uint8Array | undefined;
+      try {
+        signal = await config.fs.readFile(config.paths.signalFile(index));
+      } catch (error) {
+        config.onCaptureError?.(error);
+        return undefined;
+      }
+      if (signal === undefined || signal.length === 0) {
+        return index;
+      }
+      index += 1;
+    }
+    return slotCount;
+  }
+
+  async function firstFreeSlotUntilKnown(startIndex: number): Promise<number | undefined> {
+    while (!closed) {
+      const index = await firstFreeSlotFrom(startIndex);
+      if (index !== undefined) {
+        return index;
+      }
+      await delay(slotReadMs);
+    }
+    return undefined;
   }
 
   function scheduleFlush(): void {
@@ -237,6 +279,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     msg: Extract<GameToCompanion, { t: "hello" }>,
     frameSeq: number,
   ): Promise<void> {
+    const hadSession = session !== "";
     const isNewSession = msg.session !== session;
     const targetIndex = Math.max(0, msg.slot - 1);
     const needsResync = isNewSession || targetIndex > allocator.position();
@@ -266,11 +309,21 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     pending.push(...carriedAcks);
     held = withoutSupersededProgress([...held, ...requeued, ...carriedOthers]);
 
+    let nextIndex: number | undefined;
+    if (hadSession) {
+      const emptied = await resetSignalsUntilEmpty(targetIndex);
+      nextIndex = emptied ? targetIndex : undefined;
+    } else {
+      nextIndex = await firstFreeSlotUntilKnown(targetIndex);
+    }
+    if (nextIndex === undefined) {
+      return;
+    }
+
     build = msg.build;
     session = msg.session;
     helloSeen = true;
-    allocator.setNext(targetIndex);
-    await resetSignalsFrom(targetIndex);
+    allocator.setNext(nextIndex);
     exhaustedUntilResync = false;
     if (isNewSession) {
       frameBuf = { seq: frameSeq, complete: true };

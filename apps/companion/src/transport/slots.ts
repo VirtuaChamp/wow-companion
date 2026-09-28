@@ -68,6 +68,7 @@ export function createSlotAllocator(slotCount: number = SLOT_COUNT): SlotAllocat
 
 export type SlotFs = {
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  readFile(path: string): Promise<Uint8Array | undefined>;
 };
 
 export type SlotPaths = {

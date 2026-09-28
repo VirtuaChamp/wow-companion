@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -116,6 +116,16 @@ function createWorld(): World {
     signalFile: (i) => join(dir, "sig", `${pad(i)}.wav`),
   };
   const fs: SlotFs = {
+    async readFile(path: string): Promise<Uint8Array | undefined> {
+      try {
+        return await readFile(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      }
+    },
     async writeFile(path: string, data: string | Uint8Array): Promise<void> {
       if (failNext.value === "r.lua" && path.endsWith("r.lua")) {
         failNext.value = "none";
@@ -312,6 +322,54 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
 
     const after = await world.sim.info();
     expect(receivedIds(after)).toEqual(["before-restart", "queued-while-down"]);
+    expect(restarted.status().slotsLeft).toBe(SLOT_COUNT - (after.slot - 1));
+  });
+
+  it("a restarted companion delivers the unread slots the previous process wrote, in order, and then its new messages", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const first = world.startLink();
+    await converge(world, first);
+    await world.addonPolls(1);
+    for (const id of ["unread-1", "unread-2"]) {
+      expect(first.send(reply(id)).ok).toBe(true);
+      await first.idle();
+    }
+    first.close();
+    expect(receivedIds(await world.sim.info())).toEqual([]);
+
+    const restarted = world.startLink();
+    expect(restarted.send(reply("new-after-restart")).ok).toBe(true);
+    await world.addonTick("repaint", 2);
+    await world.addonTick("hello");
+    await world.captureInto(restarted);
+    await world.addonPolls(4);
+
+    const after = await world.sim.info();
+    expect(receivedIds(after)).toEqual(["unread-1", "unread-2", "new-after-restart"]);
+    expect(restarted.status().slotsLeft).toBe(SLOT_COUNT - (after.slot - 1));
+  });
+
+  it("a restarted companion that captures a stale again hello (behind the addon's real position) loses nothing and writes nothing behind the addon", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const first = world.startLink();
+    await converge(world, first);
+    await world.addonPolls(1);
+    expect(first.send(reply("read-1")).ok).toBe(true);
+    await first.idle();
+    await world.addonPolls(1);
+    first.close();
+    expect((await world.sim.info()).painted).toMatchObject({ t: "hello", again: true, slot: 2 });
+
+    const restarted = world.startLink();
+    expect(restarted.send(reply("after-stale-hello")).ok).toBe(true);
+    await world.captureInto(restarted);
+    await world.addonPolls(1);
+
+    const after = await world.sim.info();
+    expect(receivedIds(after)).toEqual(["read-1", "after-stale-hello"]);
+    expect(after.slot).toBe(4);
     expect(restarted.status().slotsLeft).toBe(SLOT_COUNT - (after.slot - 1));
   });
 

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { GameToCompanion } from "@wow-companion/contracts";
+import type { CompanionToGame, GameToCompanion } from "@wow-companion/contracts";
 import { createGridFileSource } from "../../src/transport/capture.ts";
 import { parseCellGridFile } from "../../src/transport/grid.ts";
 import { createScreenLink } from "../../src/transport/screen-link.ts";
@@ -13,6 +13,7 @@ import type { SlotFs, SlotPaths } from "../../src/transport/slots.ts";
 import {
   cleanScratch,
   encodeHelloGridFile,
+  latestSignal,
   parseSlotContent,
   repoRoot,
   resolveLuaCommand,
@@ -78,6 +79,9 @@ function makeMemoryFs(writes: RecordedWrite[]): SlotFs {
   return {
     async writeFile(path: string, data: string | Uint8Array): Promise<void> {
       writes.push({ path, data });
+    },
+    async readFile(path: string): Promise<Uint8Array | undefined> {
+      return latestSignal(writes, path);
     },
   };
 }
@@ -148,6 +152,17 @@ async function startConnected(options: ConnectedOptions): Promise<Connected> {
       await link.poll();
       await link.idle();
     },
+  };
+}
+
+function reply(id: string): CompanionToGame {
+  return {
+    t: "reply",
+    id,
+    chat: "general",
+    provider: "claude",
+    summary: `summary ${id}`,
+    full: `full ${id}`,
   };
 }
 
@@ -228,13 +243,15 @@ describe("link.hello", () => {
     expect(link.status().connected).toBe(false);
   });
 
-  it("sets the allocator to hello.slot and empties the signals from there once hello is decoded", async () => {
-    const outDir = mkdtempSync(join(tmpdir(), "wowc-link-hello-"));
-    tmpDirs.push(outDir);
-    encodeHelloGrid(outDir, "sess-a", 5, 10);
-    const gridPath = join(outDir, "frame-0.grid");
+  it("a companion that holds no session adopts the hello's session, empties no signal, and starts at the first slot at or after hello.slot whose signal is not ready", async () => {
+    const gridPath = encodeHelloGridFile("sess-a", 5, 10);
 
-    const writes: RecordedWrite[] = [];
+    const writes: RecordedWrite[] = [
+      { path: "sig/4.wav", data: new Uint8Array([1]) },
+      { path: "sig/5.wav", data: new Uint8Array([1]) },
+      { path: "sig/6.wav", data: new Uint8Array(0) },
+    ];
+    const seeded = writes.length;
     const link = createScreenLink({
       frameSource: createGridFileSource(gridPath),
       fs: makeMemoryFs(writes),
@@ -251,30 +268,103 @@ describe("link.hello", () => {
     await link.idle();
 
     expect(link.status().connected).toBe(true);
-    expect(link.status().slotsLeft).toBe(5);
+    expect(link.status().slotsLeft).toBe(3);
 
-    const deliverIndex = writes.findIndex((w) => w.path.includes("r.lua"));
-    const resetPaths = writes
-      .slice(0, deliverIndex)
-      .filter((w) => w.path.startsWith("sig/"))
-      .map((w) => w.path)
-      .sort();
-    expect(resetPaths).toEqual([
-      "sig/4.wav",
-      "sig/5.wav",
-      "sig/6.wav",
-      "sig/7.wav",
-      "sig/8.wav",
-      "sig/9.wav",
-    ]);
-
-    const deliverWrites = writes.filter((w) => w.path.includes("r.lua"));
+    const fresh = writes.slice(seeded);
+    expect(
+      fresh.filter((w) => w.path.startsWith("sig/") && (w.data as Uint8Array).length === 0),
+    ).toEqual([]);
+    const deliverWrites = fresh.filter((w) => w.path.includes("r.lua"));
     expect(deliverWrites).toHaveLength(1);
-    expect(deliverWrites[0]?.path).toBe("addons/WoWCompanion_R4/r.lua");
+    expect(deliverWrites[0]?.path).toBe("addons/WoWCompanion_R6/r.lua");
     expect(parseSlotContent(deliverWrites[0]?.data as string)).toEqual({
       session: "sess-a",
       msgs: [{ t: "ack", seq: 10 }],
     });
+  });
+
+  it("a slot whose r.lua was written but whose signal is empty counts as free for a companion adopting a session", async () => {
+    const gridPath = encodeHelloGridFile("sess-a", 2, 3);
+    const writes: RecordedWrite[] = [
+      { path: "addons/WoWCompanion_R1/r.lua", data: "stale content" },
+      { path: "sig/1.wav", data: new Uint8Array(0) },
+    ];
+    const link = createScreenLink({
+      frameSource: createGridFileSource(gridPath),
+      fs: makeMemoryFs(writes),
+      paths,
+      validWav: new Uint8Array([1]),
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+    });
+    activeLink = link;
+
+    await link.poll();
+    await link.idle();
+
+    expect(link.status().slotsLeft).toBe(8);
+    expect(writes.filter((w) => w.path.includes("r.lua")).pop()?.path).toBe(
+      "addons/WoWCompanion_R1/r.lua",
+    );
+  });
+
+  it("a re-sync whose signal reset fails in any slot writes and releases nothing until every required signal is empty", async () => {
+    const landed: RecordedWrite[] = [];
+    let failReset = false;
+    const errors: unknown[] = [];
+    const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
+      async writeFile(path: string, data: string | Uint8Array): Promise<void> {
+        if (failReset && path === "sig/6.wav" && (data as Uint8Array).length === 0) {
+          failReset = false;
+          throw new Error("EBUSY");
+        }
+        landed.push({ path, data });
+      },
+    };
+    const { link, feed } = await startConnected({
+      session: "sess-reset-a",
+      delay: instantDelay,
+      fs,
+      onCaptureError: (error) => errors.push(error),
+    });
+    link.send(reply("held-across-failed-reset"));
+    await link.idle();
+    const before = landed.length;
+
+    failReset = true;
+    await feed(encodeHelloGridFile("sess-reset-b", 1, 3));
+    await feed(encodeHelloGridFile("sess-reset-b", 2, 4, true));
+
+    expect(errors.length).toBeGreaterThan(0);
+    const after = landed.slice(before);
+    const firstDeliver = after.findIndex((w) => w.path.includes("r.lua"));
+    expect(firstDeliver).toBeGreaterThan(0);
+    for (let index = 0; index < 10; index += 1) {
+      const emptiedBefore = after
+        .slice(0, firstDeliver)
+        .some((w) => w.path === `sig/${index}.wav` && (w.data as Uint8Array).length === 0);
+      expect(emptiedBefore).toBe(true);
+    }
+    const delivered = after
+      .filter((w) => w.path.includes("r.lua"))
+      .map((w) => ({ path: w.path, ...parseSlotContent(w.data as string) }));
+    expect(delivered).toEqual([
+      {
+        path: "addons/WoWCompanion_R0/r.lua",
+        session: "sess-reset-b",
+        msgs: [{ t: "ack", seq: 3 }],
+      },
+      {
+        path: "addons/WoWCompanion_R1/r.lua",
+        session: "sess-reset-b",
+        msgs: [reply("held-across-failed-reset")],
+      },
+    ]);
   });
 
   it("a reload during which the addon passed stale slots still converges to the new hello.slot", async () => {
@@ -904,6 +994,9 @@ describe("link.errors", () => {
     let failNext: "none" | "r.lua" | "sig" = "none";
     const errors: unknown[] = [];
     const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(writes, path);
+      },
       async writeFile(path: string, data: string | Uint8Array): Promise<void> {
         if (failNext === "r.lua" && path.includes("r.lua")) {
           failNext = "none";
@@ -1092,6 +1185,9 @@ describe("link.resync-race", () => {
     let holdReplyWrite = false;
     const landed: RecordedWrite[] = [];
     const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
       async writeFile(path: string, data: string | Uint8Array): Promise<void> {
         if (holdReplyWrite && path.includes("r.lua")) {
           holdReplyWrite = false;
@@ -1150,6 +1246,9 @@ describe("link.resync-race", () => {
     let holdReset = false;
     const landed: RecordedWrite[] = [];
     const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
       async writeFile(path: string, data: string | Uint8Array): Promise<void> {
         if (holdReplyWrite && path.includes("r.lua")) {
           holdReplyWrite = false;
@@ -1204,6 +1303,9 @@ describe("link.resync-race", () => {
     let holdReset = false;
     const landed: RecordedWrite[] = [];
     const fs: SlotFs = {
+      async readFile(path: string): Promise<Uint8Array | undefined> {
+        return latestSignal(landed, path);
+      },
       async writeFile(path: string, data: string | Uint8Array): Promise<void> {
         if (holdReset && path.startsWith("sig/") && (data as Uint8Array).length === 0) {
           await gate.promise;

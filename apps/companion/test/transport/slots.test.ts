@@ -80,6 +80,9 @@ function makeMemoryFs(writes: { path: string; data: string | Uint8Array }[]): Sl
     async writeFile(path: string, data: string | Uint8Array): Promise<void> {
       writes.push({ path, data });
     },
+    async readFile(): Promise<Uint8Array | undefined> {
+      return undefined;
+    },
   };
 }
 
