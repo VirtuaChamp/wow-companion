@@ -1,13 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
-import spawn from "cross-spawn";
 import type { ProviderConfig, ProviderEvent } from "@wow-companion/contracts";
-import {
-  codexArgs,
-  createCodexWith,
-  defaultCheckInstalled,
-  minimalEnv,
-} from "../../src/adapters/providers/codex.ts";
+import { codexArgs, createCodexWith, minimalEnv } from "../../src/adapters/providers/codex.ts";
 import {
   fakeCheckInstalled,
   fakeRun,
@@ -15,8 +9,6 @@ import {
   fixturePath,
   loadRawLinesFixture,
 } from "./helpers.ts";
-
-vi.mock("cross-spawn", () => ({ default: { sync: vi.fn() } }));
 
 function baseConfig(models: string[] = ["gpt-5.1-codex"]): ProviderConfig {
   return {
@@ -641,26 +633,6 @@ describe("provider.codex", () => {
       }
     },
   );
-
-  test("provider.codex.defaultCheckInstalled reports installed on a clean spawn.sync exit", () => {
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      status: 0,
-      stdout: Buffer.from("codex-cli 0.1.0"),
-      stderr: Buffer.from(""),
-    } as ReturnType<typeof spawn.sync>);
-    const result = defaultCheckInstalled(fixturePath());
-    expect(result).toEqual({ installed: true });
-  });
-
-  test("provider.codex.defaultCheckInstalled reports not installed when spawn.sync errors", () => {
-    vi.mocked(spawn.sync).mockReturnValueOnce({
-      error: new Error("spawn codex ENOENT"),
-      status: null,
-    } as ReturnType<typeof spawn.sync>);
-    const result = defaultCheckInstalled(fixturePath());
-    expect(result.installed).toBe(false);
-    expect(result.reason).toBe("spawn codex ENOENT");
-  });
 
   test("provider.codex.session_unknown patterns require a resume in flight", async () => {
     const lines = ["stderr: Error: model not found: gpt-bogus", "exit: 1"];

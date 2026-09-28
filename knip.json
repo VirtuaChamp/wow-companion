@@ -6,17 +6,11 @@
       "project": ["scripts/**/*.ts"]
     },
     "apps/companion": {
-      "entry": [
-        "src/main.ts",
-        "src/adapters/**/*.ts",
-        "src/core/**/*.ts",
-        "src/transport/**/*.ts",
-        "test/providers/record-*.ts"
-      ],
+      "entry": ["src/main.ts", "test/providers/record-*.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "apps/mcp": {
-      "entry": ["src/server.ts", "src/**/*.ts"],
+      "entry": ["src/server.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"]
     },
     "packages/contracts": {
@@ -25,15 +19,5 @@
     }
   },
   "ignoreBinaries": ["luacheck", "claude", "codex", "cursor-agent"],
-  "ignoreDependencies": [
-    "@anthropic-ai/claude-agent-sdk",
-    "@anthropic-ai/sdk",
-    "@modelcontextprotocol/sdk",
-    "better-sqlite3",
-    "cross-spawn",
-    "zod",
-    "@types/cross-spawn",
-    "@types/better-sqlite3",
-    "@wow-companion/contracts"
-  ]
+  "ignoreDependencies": []
 }

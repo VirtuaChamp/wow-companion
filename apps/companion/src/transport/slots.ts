@@ -108,7 +108,7 @@ function writeAscii(view: DataView, offset: number, text: string): void {
   }
 }
 
-export function buildSilentWav(): Uint8Array {
+function buildSilentWav(): Uint8Array {
   const sampleRate = 8000;
   const numChannels = 1;
   const bitsPerSample = 16;

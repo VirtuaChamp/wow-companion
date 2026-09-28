@@ -15,7 +15,7 @@ export function safeRunDir(baseDir: string, subfolder: string, runId: string): s
   return join(root, runId);
 }
 
-export function reportLeakedRunDir(dir: string, error: unknown): void {
+function reportLeakedRunDir(dir: string, error: unknown): void {
   console.error(`failed to remove run directory ${dir}: ${String(error)}`);
 }
 

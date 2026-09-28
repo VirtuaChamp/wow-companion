@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { parseCompanionToGame, parseGameToCompanion, parseSnapshot } from "../src/parse.ts";
+import {
+  isEffort,
+  isProviderId,
+  parseCompanionToGame,
+  parseGameToCompanion,
+  parseItemsRequest,
+  parseSnapshot,
+  parseWaypointRequest,
+} from "../src/parse.ts";
 import type { CompanionToGame, GameToCompanion, Snapshot } from "../src/types.ts";
 import type { Choice } from "../src/index.ts";
 
@@ -682,5 +690,33 @@ describe("contracts.parse", () => {
     };
     expect(parseSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot);
     expect(parseSnapshot({ ...snapshot, money: "500" })).toBeUndefined();
+  });
+});
+
+describe("contracts.parse local API requests", () => {
+  it("parses a waypoint request body and refuses anything else", () => {
+    const body = { uiMapId: 85, x: 40.5, y: 60, label: "Innkeeper" };
+    expect(parseWaypointRequest(body)).toEqual(body);
+    expect(parseWaypointRequest({ ...body, x: "40" })).toBeUndefined();
+    expect(parseWaypointRequest({ uiMapId: 85, x: 1, y: 2 })).toBeUndefined();
+    expect(parseWaypointRequest(null)).toBeUndefined();
+    expect(parseWaypointRequest([body])).toBeUndefined();
+  });
+
+  it("parses an items request body of integer ids and accepts an empty Lua table", () => {
+    expect(parseItemsRequest({ ids: [1, 200] })).toEqual({ ids: [1, 200] });
+    expect(parseItemsRequest({ ids: [] })).toEqual({ ids: [] });
+    expect(parseItemsRequest({ ids: {} })).toEqual({ ids: [] });
+    expect(parseItemsRequest({ ids: [1.5] })).toBeUndefined();
+    expect(parseItemsRequest({ ids: ["1"] })).toBeUndefined();
+    expect(parseItemsRequest({})).toBeUndefined();
+    expect(parseItemsRequest([1, 2])).toBeUndefined();
+  });
+
+  it("exposes the provider and effort guards", () => {
+    expect(isProviderId("claude")).toBe(true);
+    expect(isProviderId("gpt")).toBe(false);
+    expect(isEffort("xhigh")).toBe(true);
+    expect(isEffort("ultra")).toBe(false);
   });
 });

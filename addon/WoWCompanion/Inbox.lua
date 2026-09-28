@@ -34,6 +34,8 @@ local exhausted = false
 local lowWarned = false
 local slotFailWarned = {}
 local helloSeqsInFlight = {}
+local helloAckedHandlers = {}
+local tooLargeWarned = {}
 
 local function slotAddonName(index)
   return ("WoWCompanion_R%03d"):format(index)
@@ -124,11 +126,20 @@ local function tryAck(seq)
   elseif current.seq ~= seq then
     return
   end
+  local wasHello = current.t == "hello"
   helloSeqsInFlight = {}
   current = nil
   local nextEntry = table.remove(sendQueue, 1)
   if nextEntry then
     startCurrent(nextEntry)
+  end
+  if wasHello then
+    for i = 1, #helloAckedHandlers do
+      local ok, err = pcall(helloAckedHandlers[i])
+      if not ok then
+        print("WoW Companion: hello handler error: " .. tostring(err))
+      end
+    end
   end
 end
 
@@ -153,31 +164,88 @@ function WoWCompanion_Deliver(deliverySession, msgs)
   end
 end
 
-function ns.Transport.send(tbl)
-  if tbl.t == "state" then
-    for i = #sendQueue, 1, -1 do
-      if sendQueue[i].t == "state" then
-        table.remove(sendQueue, i)
+local function describeTooLarge(tbl)
+  if tbl.t == "state" and type(tbl.delta) == "table" and ns.Codec.encodeJson then
+    local worstKey
+    local worstSize = -1
+    for key, value in pairs(tbl.delta) do
+      local ok, json = pcall(ns.Codec.encodeJson, value)
+      if ok and #json > worstSize then
+        worstKey = key
+        worstSize = #json
       end
     end
-  else
+    if worstKey ~= nil then
+      return ("state (key %s)"):format(tostring(worstKey))
+    end
+  end
+  return tostring(tbl.t)
+end
+
+local function mergeDeltas(older, newer)
+  local merged = {}
+  for key, value in pairs(older or {}) do
+    merged[key] = value
+  end
+  for key, value in pairs(newer or {}) do
+    merged[key] = value
+  end
+  return merged
+end
+
+local function mergeIntoQueuedState(tbl, seq)
+  for i = #sendQueue, 1, -1 do
+    local queued = sendQueue[i]
+    if queued.t == "state" then
+      local mergedMsg = {}
+      for key, value in pairs(tbl) do
+        mergedMsg[key] = value
+      end
+      mergedMsg.delta = mergeDeltas(queued.msg.delta, tbl.delta)
+      local frames = ns.Codec.encode(mergedMsg, seq)
+      if frames then
+        sendQueue[i] = { seq = seq, frames = frames, t = "state", msg = mergedMsg }
+        return true
+      end
+      return false
+    end
+  end
+  return false
+end
+
+function ns.Transport.send(tbl)
+  if tbl.t ~= "state" then
     local queued = #sendQueue + (current and 1 or 0)
     if queued >= QUEUE_CAP then
       return nil, "busy"
     end
   end
   local seq = nextSeq()
+  if tbl.t == "state" and mergeIntoQueuedState(tbl, seq) then
+    return seq
+  end
   local frames, err = ns.Codec.encode(tbl, seq)
   if not frames then
+    if err == "too_large" then
+      local what = describeTooLarge(tbl)
+      if not tooLargeWarned[what] then
+        tooLargeWarned[what] = true
+        print(("WoW Companion: %s not sent, too large for the transport"):format(what))
+      end
+    end
     return nil, err
   end
-  local entry = { seq = seq, frames = frames, t = tbl.t }
+  local entry = { seq = seq, frames = frames, t = tbl.t, msg = tbl }
   if current then
     table.insert(sendQueue, entry)
   else
     startCurrent(entry)
   end
   return seq
+end
+
+function ns.Transport.onHelloAcked(fn)
+  table.insert(helloAckedHandlers, fn)
 end
 
 function ns.Transport.onMessage(fn)

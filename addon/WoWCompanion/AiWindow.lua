@@ -429,15 +429,23 @@ end
 
 function AiWindow.submitAsk(text)
   AiWindow.show()
-  AiWindow.printLine("you", text, nil, nil)
   local askId = nextAskId()
-  ns.Transport.send({
+  local seq, err = ns.Transport.send({
     t = "ask",
     id = askId,
     chat = activeChat,
     text = text,
     mentions = resolveMentions(text),
   })
+  if seq == nil and err ~= nil then
+    if err == "busy" then
+      AiWindow.notice("[Claude] busy, not sent")
+    else
+      AiWindow.notice("[Claude] not sent (" .. tostring(err) .. ")")
+    end
+    return nil, err
+  end
+  AiWindow.printLine("you", text, nil, nil)
   return askId
 end
 
@@ -743,7 +751,10 @@ function AiWindow.onInputEnter(box)
     end
     return
   end
-  AiWindow.submitAsk(text)
+  local askId = AiWindow.submitAsk(text)
+  if not askId then
+    box:SetText(text)
+  end
 end
 
 local function buildInputBox(parent)

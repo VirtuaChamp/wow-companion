@@ -1,4 +1,3 @@
-import spawn from "cross-spawn";
 import { mkdirSync } from "node:fs";
 import type {
   CreateProvider,
@@ -8,7 +7,7 @@ import type {
   ProviderError,
   Result,
 } from "@wow-companion/contracts";
-import { runProcess, type RunOutcome, type SpawnLine } from "./spawn.ts";
+import { type RunOutcome, type SpawnLine } from "./spawn.ts";
 import { cleanupRunDir, safeRunDir } from "./run-dir.ts";
 
 type RunFn = (
@@ -113,17 +112,6 @@ export function codexArgs(input: {
     return ["exec", ...execOptions, "resume", "--json", input.sessionId, prompt];
   }
   return ["exec", "--json", ...execOptions, prompt];
-}
-
-export function defaultCheckInstalled(cwd: string): { installed: boolean; reason?: string } {
-  const check = spawn.sync("codex", ["--version"], { cwd });
-  if (check.error || check.status !== 0) {
-    return {
-      installed: false,
-      reason: check.error ? check.error.message : "codex --version failed",
-    };
-  }
-  return { installed: true };
 }
 
 export function createCodexWith(run: RunFn, checkInstalled: CheckInstalledFn): CreateProvider {
@@ -307,5 +295,3 @@ export function createCodexWith(run: RunFn, checkInstalled: CheckInstalledFn): C
     return provider;
   };
 }
-
-export const createCodex: CreateProvider = createCodexWith(runProcess, defaultCheckInstalled);

@@ -22,11 +22,31 @@ export type SettingsApplyError =
   | "model_unlisted"
   | "effort_unsupported";
 
-export type ProviderChange = { chatId: string; provider: ProviderId };
+type ProviderChange = { chatId: string; provider: ProviderId };
 
 export type ApplyOutcome = { settings: Settings; providerChange?: ProviderChange };
 
 type SettingsMessage = Extract<GameToCompanion, { t: "settings" }>;
+
+export function perChatFrom(
+  entries: Iterable<readonly [string, PerChatChoice]>,
+): Record<string, PerChatChoice> {
+  return Object.assign(Object.create(null), Object.fromEntries(entries)) as Record<
+    string,
+    PerChatChoice
+  >;
+}
+
+export function chatChoice(settings: Settings, chatId: string): PerChatChoice | undefined {
+  return Object.hasOwn(settings.perChat, chatId) ? settings.perChat[chatId] : undefined;
+}
+
+export function dropChatChoice(settings: Settings, chatId: string): Settings {
+  return {
+    ...settings,
+    perChat: perChatFrom(Object.entries(settings.perChat).filter(([id]) => id !== chatId)),
+  };
+}
 
 function findProvider(
   options: readonly ProviderOption[],
@@ -69,7 +89,7 @@ export function optionChoices(
   settings: Settings,
   activeChat: { id: string; provider: ProviderId } | undefined,
 ): OptionChoices {
-  const own = activeChat === undefined ? undefined : settings.perChat[activeChat.id];
+  const own = activeChat === undefined ? undefined : chatChoice(settings, activeChat.id);
   if (activeChat === undefined || own === undefined) return { active: settings.global };
   return {
     active: settings.global,
@@ -114,7 +134,10 @@ export function apply(
     value: {
       settings: {
         global: current.global,
-        perChat: { ...current.perChat, [msg.chat]: toPerChatChoice(msg) },
+        perChat: perChatFrom([
+          ...Object.entries(current.perChat),
+          [msg.chat, toPerChatChoice(msg)],
+        ]),
       },
       providerChange: { chatId: msg.chat, provider: msg.provider },
     },

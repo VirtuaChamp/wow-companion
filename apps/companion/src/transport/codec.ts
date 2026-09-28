@@ -9,8 +9,8 @@ import {
   syncRowCell,
 } from "./grid.ts";
 
-export const CODEC_VERSION = 1;
-export const CODEC_MAGIC = [0x57, 0x43] as const;
+const CODEC_VERSION = 1;
+const CODEC_MAGIC = [0x57, 0x43] as const;
 const HEADER_LEN = 9;
 const CRC_LEN = 2;
 const FRAME_PAYLOAD_MAX = 1024;

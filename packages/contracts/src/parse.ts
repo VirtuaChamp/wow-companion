@@ -12,6 +12,7 @@ import type {
   Snapshot,
   Waypoint,
 } from "./types.ts";
+import type { PostItemsRequest, PostWaypointRequest } from "./local-api.ts";
 
 type CmdName = Extract<GameToCompanion, { t: "cmd" }>["name"];
 type ProgressStatus = Extract<CompanionToGame, { t: "progress" }>["status"];
@@ -54,6 +55,10 @@ const errorCodes = literalsOf<ErrorCode>({
   item_timeout: true,
   no_active_ask: true,
   no_waypoint_map: true,
+  forbidden: true,
+  unsupported_media_type: true,
+  bad_request: true,
+  daemon_error: true,
   busy: true,
   bad_frame: true,
   bad_settings: true,
@@ -71,8 +76,12 @@ function fromParsed<T>(value: T | undefined): Result<T, "bad_frame"> {
   return value === undefined ? badFrame() : ok(value);
 }
 
-function isEffort(value: unknown): value is Effort {
+export function isEffort(value: unknown): value is Effort {
   return isOneOf(value, efforts);
+}
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return isOneOf(value, providerIds);
 }
 
 function fromGuard<T>(guard: (value: unknown) => value is T): (value: unknown) => T | undefined {
@@ -143,6 +152,20 @@ function parseWaypoint(value: unknown): Waypoint | undefined {
   )
     return undefined;
   return { uiMapId: value.uiMapId, x: value.x, y: value.y, label: value.label };
+}
+
+export function parseWaypointRequest(value: unknown): PostWaypointRequest | undefined {
+  return parseWaypoint(value);
+}
+
+function isItemId(value: unknown): value is number {
+  return isNumber(value) && Number.isInteger(value);
+}
+
+export function parseItemsRequest(value: unknown): PostItemsRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const ids = parseArrayField(value.ids, fromGuard(isItemId));
+  return ids === undefined ? undefined : { ids };
 }
 
 function parseItemDetail(value: unknown): ItemDetail | undefined {

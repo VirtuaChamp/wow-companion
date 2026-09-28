@@ -9,7 +9,7 @@ export type HistoryLine = {
   kind?: "notice";
 };
 
-export type RunningAsk = { id: string; text: string; cancelling?: boolean };
+type RunningAsk = { id: string; text: string; cancelling?: boolean };
 
 export type ChatState = {
   id: string;
@@ -33,7 +33,7 @@ export type ChatsOutcome = { state: ChatsState; effects: readonly CompanionToGam
 
 export type BeginAskOutcome = ChatsOutcome & { sessionId?: string };
 
-export type RetryAsk = { askId: string; text: string; transcriptSummary: string };
+type RetryAsk = { askId: string; text: string; transcriptSummary: string };
 
 export type FailAskOutcome = ChatsOutcome & { retry?: RetryAsk };
 

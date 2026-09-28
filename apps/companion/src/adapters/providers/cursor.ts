@@ -1,4 +1,3 @@
-import spawn from "cross-spawn";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -9,7 +8,7 @@ import type {
   Result,
 } from "@wow-companion/contracts";
 import { minimalEnv } from "./codex.ts";
-import { runProcess, type RunOutcome, type SpawnLine } from "./spawn.ts";
+import { type RunOutcome, type SpawnLine } from "./spawn.ts";
 import { cleanupRunDir, safeRunDir } from "./run-dir.ts";
 
 type RunFn = (
@@ -83,23 +82,6 @@ export function parseListModelsOutput(stdout: string): string[] {
     .map((line) => idLine.exec(line))
     .filter((match): match is RegExpExecArray => match !== null)
     .map((match) => match[1] as string);
-}
-
-export function defaultCheckInstalled(cwd: string): { installed: boolean; reason?: string } {
-  const check = spawn.sync("cursor-agent", ["--version"], { cwd });
-  if (check.error || check.status !== 0) {
-    return {
-      installed: false,
-      reason: check.error ? check.error.message : "cursor-agent --version failed",
-    };
-  }
-  return { installed: true };
-}
-
-export function defaultListModels(cwd: string): string[] {
-  const check = spawn.sync("cursor-agent", ["--list-models"], { cwd });
-  if (check.error || check.status !== 0 || !check.stdout) return [];
-  return parseListModelsOutput(check.stdout.toString("utf8"));
 }
 
 export function createCursorWith(
@@ -282,10 +264,3 @@ export function createCursorWith(
     return provider;
   };
 }
-
-export const createCursor: CreateProvider = createCursorWith(
-  runProcess,
-  defaultCheckInstalled,
-  defaultListModels,
-  false,
-);
