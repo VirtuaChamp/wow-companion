@@ -13,19 +13,19 @@ const SNAPSHOT_KEYS: readonly (keyof Snapshot)[] = [
   "talents",
 ];
 
-export function fullSnapshot(ctx: DaemonContext): Snapshot | undefined {
-  return parseSnapshot(ctx.state.game);
+function isLive(ctx: DaemonContext): boolean {
+  return SNAPSHOT_KEYS.every((key) => ctx.state.refreshed.has(key));
+}
+
+export function liveSnapshot(ctx: DaemonContext): Snapshot | undefined {
+  return ctx.isConnected() && isLive(ctx) ? parseSnapshot(ctx.state.game) : undefined;
 }
 
 export function getState(ctx: DaemonContext): GetStateResponse {
-  const snapshot = fullSnapshot(ctx);
-  return ctx.isConnected() && isLive(ctx) && snapshot !== undefined
-    ? { ok: true, value: snapshot }
-    : { ok: false, error: "not_connected" };
-}
-
-function isLive(ctx: DaemonContext): boolean {
-  return SNAPSHOT_KEYS.every((key) => ctx.state.refreshed.has(key));
+  const snapshot = liveSnapshot(ctx);
+  return snapshot === undefined
+    ? { ok: false, error: "not_connected" }
+    : { ok: true, value: snapshot };
 }
 
 export function onState(ctx: DaemonContext, msg: Extract<GameToCompanion, { t: "state" }>): void {

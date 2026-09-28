@@ -116,7 +116,9 @@ function isAllowedHost(host: string | undefined, port: number): boolean {
 }
 
 function isJsonContentType(value: string | undefined): boolean {
-  return value !== undefined && value.toLowerCase().startsWith("application/json");
+  if (value === undefined) return false;
+  const essence = value.split(";")[0]?.trim().toLowerCase();
+  return essence === "application/json";
 }
 
 function runIdOf(request: http.IncomingMessage): string | undefined {

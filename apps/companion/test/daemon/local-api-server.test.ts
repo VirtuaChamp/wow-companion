@@ -360,4 +360,35 @@ describe("daemon.local-api-server", () => {
       expect(await response.json()).toEqual({ ok: false, error });
     }
   });
+
+  it("compares the media type essence to application/json, allowing parameters and refusing look-alikes", async () => {
+    let calls = 0;
+    const { base } = await start(
+      handlers({
+        postItems: async () => {
+          calls += 1;
+          return { ok: true, value: [] };
+        },
+      }),
+    );
+    const post = (type: string) =>
+      fetch(`${base}/items`, {
+        method: "POST",
+        headers: { "content-type": type },
+        body: '{"ids":[1]}',
+      });
+    for (const accepted of [
+      "application/json",
+      "application/json; charset=utf-8",
+      "Application/JSON ;charset=UTF-8",
+    ]) {
+      expect([accepted, (await post(accepted)).status]).toEqual([accepted, 200]);
+    }
+    for (const refused of ["application/jsonx", "application/json-seq", "application/jsonp; a=b"]) {
+      const response = await post(refused);
+      expect([refused, response.status]).toEqual([refused, 415]);
+      expect(await response.json()).toEqual({ ok: false, error: "unsupported_media_type" });
+    }
+    expect(calls).toBe(3);
+  });
 });

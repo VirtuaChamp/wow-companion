@@ -13,7 +13,7 @@ import { chatChoice } from "../core/settings.ts";
 import type { RunOutcome } from "../runner.ts";
 import { chatsErrorMessage, commit, reportChatsError } from "./commit.ts";
 import type { DaemonContext } from "./context.ts";
-import { fullSnapshot } from "./state.ts";
+import { liveSnapshot } from "./state.ts";
 
 const NEWLINE = String.fromCharCode(10);
 const SYSTEM_PREFACE =
@@ -102,7 +102,7 @@ async function executeAsk(ctx: DaemonContext, input: AskInput): Promise<void> {
           provider: chat.provider,
           ...resolveChoice(ctx, chat),
           prompt: input.text,
-          system: systemPrompt(fullSnapshot(ctx), input.mentions, input.transcriptSummary),
+          system: systemPrompt(liveSnapshot(ctx), input.mentions, input.transcriptSummary),
           ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
         },
         progressSender(ctx, input.askId),

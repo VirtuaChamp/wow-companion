@@ -342,4 +342,36 @@ describe("daemon.ask", () => {
       expect(input.effort).toBe("low");
     }
   });
+
+  it("uses the no-state prompt whenever GET /state would answer not_connected", async () => {
+    const systems: string[] = [];
+    const providers = new Map([
+      [
+        "claude" as const,
+        fakeProvider("claude", async (input) => {
+          systems.push(input.system);
+          return { ok: true, value: { sessionId: "s", text: "ok" } };
+        }),
+      ],
+    ]);
+
+    const live = await connected({ providers });
+    live.link.push({ t: "ask", id: "a1", chat: "default", text: "hi", mentions: [] });
+    await waitFor(() => systems.length === 1);
+    expect(systems[0]).toContain("level 10");
+
+    live.link.setConnected(false);
+    live.link.push({ t: "ask", id: "a2", chat: "default", text: "again", mentions: [] });
+    await waitFor(() => systems.length === 2);
+    expect(systems[1]).toContain("not arrived yet");
+    expect(systems[1]).not.toContain("level 10");
+
+    const adopted = startDaemon({ providers, initialGame: makeSnapshot() });
+    cleanups.push(adopted.stop);
+    adopted.link.push(hello(true));
+    adopted.link.push({ t: "ask", id: "a3", chat: "default", text: "hi", mentions: [] });
+    await waitFor(() => systems.length === 3);
+    expect(systems[2]).toContain("not arrived yet");
+    expect(systems[2]).not.toContain("level 10");
+  });
 });
