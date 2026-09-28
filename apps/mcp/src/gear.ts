@@ -142,7 +142,11 @@ function currentForSlots(
 const MAIN_HAND_SLOT = 16;
 const OFF_HAND_SLOT = 17;
 
-function twoHanderBlocksOffHand(equipped: readonly EquippedItem[]): boolean {
+function offHandBlockedByMainHand(
+  equipped: readonly EquippedItem[],
+  unresolvedSlots: readonly number[],
+): boolean {
+  if (unresolvedSlots.includes(MAIN_HAND_SLOT)) return true;
   const mainHand = equipped.find((entry) => entry.slot === MAIN_HAND_SLOT);
   return mainHand?.item.equipLoc === "INVTYPE_2HWEAPON";
 }
@@ -154,7 +158,7 @@ export function compare(
   characterLevel: number,
   unresolvedSlots: readonly number[] = [],
 ): Upgrade[] {
-  const excludedSlots = twoHanderBlocksOffHand(equipped)
+  const excludedSlots = offHandBlockedByMainHand(equipped, unresolvedSlots)
     ? [...unresolvedSlots, OFF_HAND_SLOT]
     : unresolvedSlots;
   const upgrades: Upgrade[] = [];

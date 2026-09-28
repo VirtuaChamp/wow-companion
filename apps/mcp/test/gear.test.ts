@@ -370,6 +370,21 @@ describe("gear.compare", () => {
     expect(upgrades[0]?.slot).toBe(16);
   });
 
+  it("treats the off-hand as unavailable when the main hand is occupied but unresolved (Codex gear-unknown-mainhand-offhand)", () => {
+    const shield: GearCandidate = {
+      ...makeItemDetail({
+        itemId: 709,
+        name: "Buckler",
+        equipLoc: "INVTYPE_SHIELD",
+        classId: 4,
+        subClassId: 6,
+      }),
+      source: NPC_DROP,
+    };
+    const upgrades = compare([], [shield], WARRIOR_CLASS_ID, 20, [16]);
+    expect(upgrades).toEqual([]);
+  });
+
   it("leaves current undefined for an empty slot", () => {
     const candidate: GearCandidate = {
       ...makeItemDetail({
