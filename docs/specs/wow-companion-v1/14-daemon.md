@@ -18,10 +18,12 @@ Thin by design: wiring only. Any behaviour missing from 08, 11, 12 or 13 is a fi
 
 ## Code shape
 - `main.ts`: load `config.json`, build `createScreenLink`, the enabled providers, the chats core, the state store; loop `GameLink.messages()` → core → effects.
-- `runner.ts`: runs a provider for an ask with `runId = ask.id`, streams `progress`, attaches a waypoint posted under that run id to the `reply`, 600 s timeout → `timeout`.
+- `runner.ts`: runs a provider for an ask with a runId the companion mints (matching ^[A-Za-z0-9_-]{1,64}$, mapped to the ask id; never the addon's ask.id passed through), streams `progress`, attaches a waypoint posted under that run id to the `reply`, 600 s timeout → `timeout`.
 - `local-api-server.ts`: `127.0.0.1:{companionPort}` only; `GET /state`, `POST /items` (10 s → `item_timeout`), `POST /waypoint` (`X-Wowc-Run` → ask, unknown → 409).
 - `game.json`: the last snapshot, written on each `state` delta, read at start as the last known context; `GET /state` still returns `not_connected` until a `hello` arrives (parent Must refuse).
-- On `hello`: send `options`, `chats`, `history` of the active chat (re-sent after a SavedVariables wipe).
+- On `hello` (not `again`): send `options` (with `active`, `chat`, `companionVersion` from the root package.json), `chats`, `history` of the active chat (re-sent after a SavedVariables wipe). `options` is also re-sent after every `settings` message (applied, or refused with `{t:"error", code:"bad_settings"}` first) and on every active-chat change.
+- Clock: whole epoch seconds (`Math.floor(Date.now() / 1000)`) injected into the chats core. MCP launch env: `WOWC_RUN`, `WOWC_DB_PATH`, `WOWC_PORT`. Real fs adapter for the slot link, including `readFile` (undefined for a missing file). Every contract error code handled explicitly (including `provider_failed`).
+- `knip.json`: `ignoreDependencies` emptied and the temporary app entries for `src/adapters|core|transport/**` and mcp `src/**` removed, so only real entry points remain.
 
 ## Tests first
 - `api.waypoint_run` — parent — AC 9
