@@ -43,6 +43,7 @@ const errorCodes = literalsOf<ErrorCode>({
   provider_missing: true,
   provider_auth: true,
   provider_disabled: true,
+  provider_failed: true,
   session_unknown: true,
   timeout: true,
   cancelled: true,

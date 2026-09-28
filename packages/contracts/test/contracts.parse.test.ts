@@ -128,6 +128,7 @@ const companionToGameSamples: CompanionToGame[] = [
   { t: "itemreq", req: "req-1", ids: [100, 200] },
   { t: "ack", seq: 5 },
   { t: "error", id: "ask-1", code: "provider_missing", message: "not installed" },
+  { t: "error", id: "ask-1", code: "provider_failed", message: "unclassified failure" },
   { t: "error", code: "bad_frame", message: "unparseable" },
 ];
 

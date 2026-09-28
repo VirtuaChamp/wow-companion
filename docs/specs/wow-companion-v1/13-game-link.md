@@ -19,7 +19,7 @@ Owned: `apps/companion/src/transport/{slots,screen-link,capture}.ts`, `addon/WoW
 - `createScreenLink(config): GameLink` — parent GameLink paragraph, all guarantees (batching, stale `progress` dropped, ack/re-paint, `slotsLeft`). Frame source is an internal seam (screen grab | grid file).
 - `slots.ts`: `writeSlot(n, msgs) → Result<void, "too_large" | "slots_exhausted">` — Lua literal escaping `]]`, `\`, quotes, newlines; 64 KB cap; signal flip after the file is complete.
 - `Inbox.lua`: `ns.Transport.send(tbl)` and `ns.Transport.onMessage(fn)` (parent lane interface; `send` queues and re-paints until acked), `WoWCompanion_Deliver` (the one allowed global), slot polling via `PlaySoundFile` on `sig/nnn.wav`, 20-left warning, exhausted → ask for `/reload`.
-- `setup.ts`: install/junction the addon into `{wowPath}\Interface\AddOns\`, generate 200 `WoWCompanion_Rnnn` slot addons + `sig/` + `alive/` signal files.
+- `setup.ts`: install/junction the addon into `{wowPath}\Interface\AddOns\`, generate 200 `WoWCompanion_Rnnn` slot addons + `sig/` signal files (the `alive/` heartbeat is dropped, PM decision 2026-09-27).
 
 ## Tests first
 - `slots.write`, `slots.exhausted` — parent — AC 5
@@ -38,7 +38,7 @@ Owned: `apps/companion/src/transport/{slots,screen-link,capture}.ts`, `addon/WoW
 ## Acceptance Criteria
 1. `[file]` Parent AC 5, incl. `link.batch`. Fixture: none
 2. `[file]` Parent AC 4, `link.ack` part. Fixture: grid frame source
-3. `[file]` `scripts/setup.ts` against a temp AddOns dir creates the addon, 200 slot addons, `sig/` and `alive/` files. Fixture: temp dir
+3. `[file]` `scripts/setup.ts` against a temp AddOns dir creates the addon, 200 slot addons, and `sig/` files. Fixture: temp dir
 4. `[file]` Parent AC 6, Transport part: `PlaySoundFile` readiness ("unverified — confirm in client"), `holdMs` default, the D10 exemption for codec cells. Fixture: none
 
 ## Open questions
