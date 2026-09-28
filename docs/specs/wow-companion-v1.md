@@ -42,8 +42,8 @@ Ask an AI (Claude, Codex or Cursor, on the user's own CLI login) questions from 
 
 ## Data model
 - `data/questie.sqlite` (gitignored), built by `scripts/build-db.ts` from a local QuestieDB checkout path given on the command line. Tables: `npc(id, name, sub_name, min_level, max_level, faction_id, friendly_to)`, `npc_spawn(npc_id, zone_id, ui_map_id, x, y)`, `quest(id, name, required_level, quest_level, zone_or_sort, objectives_text, next_in_chain)`, `quest_start(quest_id, kind, entity_id)`, `quest_end(quest_id, kind, entity_id)`, `object(id, name)`, `object_spawn(object_id, zone_id, ui_map_id, x, y)`, `item(id, name, item_level, required_level, class, sub_class)`, `item_source(item_id, kind{npc_drop,object_drop,quest_reward,vendor}, entity_id)`. `ui_map_id` resolved through `support/Forever/Zones/areaIdToUiMapId.lua`. Export runs the Lua tables under a Lua 5.1.5 from `.tools/lua51`, never by regex.
-- `apps/companion/state/` (gitignored): `chats.json` (chat id → provider, session id, transcript), `game.json` (last snapshot) — survives the beta's SavedVariables wipes.
-- `config.json` (gitignored; `config.example.json` committed): `wowPath`, `provider` (`claude|codex|cursor`), `providers.<id>.{enabled, model, effort, models, path}` (`models` only a fallback when the provider cannot list its own), `companionPort` (47831), `slotCount` (200), `timeoutMs` (600000).
+- `apps/companion/state/` (gitignored): `chats.json` (chat id → provider, session id, transcript), `settings.json` (the global choice and each chat's model/effort, so a settings change survives a companion restart; config.json gives the first values), `game.json` (last snapshot) — survives the beta's SavedVariables wipes.
+- `config.json` (gitignored; `config.example.json` committed): `wowPath`, `provider` (`claude|codex|cursor`), `providers.<id>.{enabled, model, effort, models}` (provider binaries are found on PATH) (`models` only a fallback when the provider cannot list its own), `companionPort` (47831), `slotCount` (200), `timeoutMs` (600000).
 
 ## Client behaviour facts (Forever 1.60.1)
 - Addon files are discovered at client launch only; a file created later is invisible until restart. `/reload` re-reads Lua of loaded addons; a LoadOnDemand addon's files are read when it is first loaded, once per UI session.
@@ -122,7 +122,7 @@ type Effort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 type ProviderError = "provider_missing" | "provider_auth" | "provider_disabled" | "provider_failed" | "session_unknown" | "timeout" | "cancelled";
 type LinkError = "too_large" | "slots_exhausted";
-type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map";
+type ToolError = "not_connected" | "item_timeout" | "no_active_ask" | "no_waypoint_map" | "too_large" | "forbidden" | "unsupported_media_type" | "bad_request" | "daemon_error"; // local API: 403 forbidden (Host not loopback or an Origin header), 415 unsupported_media_type, 400/404/405 bad_request, 413 too_large, 500 daemon_error (PM decision 2026-09-28)
 type ErrorCode = ProviderError | LinkError | ToolError | "busy" | "bad_frame" | "bad_settings";
 type ProviderConfig = { cwd: string; mcp: (runId: string) => McpLaunch; timeoutMs: number; models: readonly string[] };
 interface Provider {
