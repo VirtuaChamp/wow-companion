@@ -68,7 +68,9 @@ export function createSlotAllocator(slotCount: number = SLOT_COUNT): SlotAllocat
 
 export type SlotFs = {
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
-  readFile(path: string): Promise<Uint8Array | undefined>;
+  exists(path: string): Promise<boolean>;
+  remove(path: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
 };
 
 export type SlotPaths = {
@@ -76,13 +78,22 @@ export type SlotPaths = {
   signalFile(slotIndex: number): string;
 };
 
+const CONTROL_GONE_FILE_NAME = "ctl-gone.wav";
+
+function tempDeliverFile(target: string): string {
+  return `${target}.tmp`;
+}
+
+export function controlGoneFile(paths: SlotPaths): string {
+  return paths.signalFile(0).replace(/[^/\\]+$/, CONTROL_GONE_FILE_NAME);
+}
+
 export async function writeSlot(
   fs: SlotFs,
   paths: SlotPaths,
   allocator: SlotAllocator,
   session: string,
   msgs: readonly CompanionToGame[],
-  validWav: Uint8Array,
 ): Promise<Result<number, LinkError>> {
   const content = encodeSlotContent(session, msgs);
   if (!content.ok) {
@@ -92,47 +103,13 @@ export async function writeSlot(
     return { ok: false, error: "slots_exhausted" };
   }
   const slotIndex = allocator.position();
-  await fs.writeFile(paths.addonDeliverFile(slotIndex), content.value);
-  await fs.writeFile(paths.signalFile(slotIndex), validWav);
+  const target = paths.addonDeliverFile(slotIndex);
+  const temp = tempDeliverFile(target);
+  await fs.writeFile(temp, content.value);
+  await fs.rename(temp, target);
+  await fs.remove(paths.signalFile(slotIndex));
   allocator.next();
   return { ok: true, value: slotIndex };
 }
 
-function writeUint32LE(view: DataView, offset: number, value: number): void {
-  view.setUint32(offset, value, true);
-}
-
-function writeAscii(view: DataView, offset: number, text: string): void {
-  for (let i = 0; i < text.length; i += 1) {
-    view.setUint8(offset + i, text.charCodeAt(i));
-  }
-}
-
-function buildSilentWav(): Uint8Array {
-  const sampleRate = 8000;
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const numSamples = 8;
-  const blockAlign = (numChannels * bitsPerSample) / 8;
-  const byteRate = sampleRate * blockAlign;
-  const dataSize = numSamples * blockAlign;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-  writeAscii(view, 0, "RIFF");
-  writeUint32LE(view, 4, 36 + dataSize);
-  writeAscii(view, 8, "WAVE");
-  writeAscii(view, 12, "fmt ");
-  writeUint32LE(view, 16, 16);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  writeUint32LE(view, 24, sampleRate);
-  writeUint32LE(view, 28, byteRate);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeAscii(view, 36, "data");
-  writeUint32LE(view, 40, dataSize);
-  return new Uint8Array(buffer);
-}
-
-export const SILENT_VALID_WAV: Uint8Array = buildSilentWav();
 export const EMPTY_WAV: Uint8Array = new Uint8Array(0);

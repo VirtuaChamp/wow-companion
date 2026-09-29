@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { access, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,8 +78,9 @@ const pad = (index: number): string => String(index + 1).padStart(3, "0");
 type World = {
   dir: string;
   sim: Sim;
-  fsWrites: { path: string; data: string | Uint8Array }[];
-  failNext: { value: "none" | "r.lua" | "sig" };
+  fsOps: string[];
+  failNext: { value: "none" | "r.lua" | "rename" | "sig" };
+  signalPresent(index: number): boolean;
   startLink(): ScreenLink;
   captureInto(link: ScreenLink): Promise<void>;
   addonPolls(count: number): Promise<void>;
@@ -106,37 +107,57 @@ function createWorld(): World {
   mkdirSync(join(dir, "sig"), { recursive: true });
   for (let i = 0; i < SLOT_COUNT; i += 1) {
     mkdirSync(join(dir, "addons", `WoWCompanion_R${pad(i)}`), { recursive: true });
+    writeFileSync(
+      join(dir, "addons", `WoWCompanion_R${pad(i)}`, "r.lua"),
+      "WoWCompanion_Deliver(nil, nil)",
+    );
+    writeFileSync(join(dir, "sig", `${pad(i)}.wav`), new Uint8Array(0));
   }
+  writeFileSync(join(dir, "sig", "ctl-present.wav"), new Uint8Array(0));
+  writeFileSync(join(dir, "sig", "ctl-gone.wav"), new Uint8Array(0));
   const sim = startSim(dir);
   sims.push(sim);
-  const fsWrites: { path: string; data: string | Uint8Array }[] = [];
-  const failNext: { value: "none" | "r.lua" | "sig" } = { value: "none" };
+  const fsOps: string[] = [];
+  const failNext: { value: "none" | "r.lua" | "rename" | "sig" } = { value: "none" };
   const paths: SlotPaths = {
     addonDeliverFile: (i) => join(dir, "addons", `WoWCompanion_R${pad(i)}`, "r.lua"),
     signalFile: (i) => join(dir, "sig", `${pad(i)}.wav`),
   };
   const fs: SlotFs = {
-    async readFile(path: string): Promise<Uint8Array | undefined> {
+    async exists(path: string): Promise<boolean> {
       try {
-        return await readFile(path);
+        await access(path);
+        return true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return undefined;
+          return false;
         }
         throw error;
       }
     },
     async writeFile(path: string, data: string | Uint8Array): Promise<void> {
-      if (failNext.value === "r.lua" && path.endsWith("r.lua")) {
+      if (failNext.value === "r.lua" && path.endsWith("r.lua.tmp")) {
         failNext.value = "none";
         throw new Error("EBUSY");
       }
-      if (failNext.value === "sig" && path.endsWith(".wav") && data.length > 0) {
+      await writeFile(path, data);
+      fsOps.push(`write ${path}`);
+    },
+    async rename(from: string, to: string): Promise<void> {
+      if (failNext.value === "rename") {
         failNext.value = "none";
         throw new Error("EPERM");
       }
-      await writeFile(path, data);
-      fsWrites.push({ path, data });
+      await rename(from, to);
+      fsOps.push(`rename ${from}`);
+    },
+    async remove(path: string): Promise<void> {
+      if (failNext.value === "sig" && /[/\\]\d+\.wav$/.test(path)) {
+        failNext.value = "none";
+        throw new Error("EPERM");
+      }
+      await rm(path, { force: true });
+      fsOps.push(`remove ${path}`);
     },
   };
   const gridPath = join(dir, "grid.txt");
@@ -144,14 +165,14 @@ function createWorld(): World {
   return {
     dir,
     sim,
-    fsWrites,
+    fsOps,
     failNext,
+    signalPresent: (index) => existsSync(join(dir, "sig", `${pad(index)}.wav`)),
     startLink(): ScreenLink {
       const link = createScreenLink({
         frameSource: createGridFileSource(gridPath),
         fs,
         paths,
-        validWav: new Uint8Array([1, 2, 3]),
         emptyWav: new Uint8Array(0),
         autopoll: false,
         slotCount: SLOT_COUNT,
@@ -380,7 +401,7 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     await converge(world, link);
     await world.addonPolls(1);
 
-    for (const failing of ["r.lua", "sig"] as const) {
+    for (const failing of ["r.lua", "rename", "sig"] as const) {
       const id = `after-${failing}-failure`;
       world.failNext.value = failing;
       expect(link.send(reply(id)).ok).toBe(true);
@@ -389,8 +410,12 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     }
 
     const info = await world.sim.info();
-    expect(receivedIds(info)).toEqual(["after-r.lua-failure", "after-sig-failure"]);
-    expect(info.slot).toBe(4);
+    expect(receivedIds(info)).toEqual([
+      "after-r.lua-failure",
+      "after-rename-failure",
+      "after-sig-failure",
+    ]);
+    expect(info.slot).toBe(5);
     expect(link.status().slotsLeft).toBe(SLOT_COUNT - (info.slot - 1));
   });
 
@@ -401,7 +426,7 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     await converge(world, link);
     await world.addonPolls(1);
     const slotsLeft = link.status().slotsLeft;
-    const slotWrites = world.fsWrites.length;
+    const slotOps = world.fsOps.length;
     const addonSlot = (await world.sim.info()).slot;
 
     for (let i = 0; i < 6; i += 1) {
@@ -412,7 +437,71 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     }
 
     expect(link.status().slotsLeft).toBe(slotsLeft);
-    expect(world.fsWrites.length).toBe(slotWrites);
+    expect(world.fsOps.length).toBe(slotOps);
     expect((await world.sim.info()).slot).toBe(addonSlot);
+  });
+
+  it("field bug: with every signal file present at load and nothing written the addon loads no slot and reports no error", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const link = world.startLink();
+    await link.idle();
+    await world.addonPolls(30);
+
+    const info = await world.sim.info();
+    expect(info.slot).toBe(1);
+    expect(link.status().slotsLeft).toBe(SLOT_COUNT);
+    expect(world.fsOps.filter((op) => op.includes("r.lua"))).toEqual([]);
+    for (let index = 0; index < SLOT_COUNT; index += 1) {
+      expect(world.signalPresent(index)).toBe(true);
+    }
+  });
+
+  it("a game started before the companion waits silently, then converges and receives a reply once the companion has deleted ctl-gone", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    await world.addonPolls(5);
+    expect((await world.sim.info()).slot).toBe(1);
+
+    const link = world.startLink();
+    await converge(world, link);
+    await world.addonPolls(1);
+    expect(link.send(reply("late-companion")).ok).toBe(true);
+    await link.idle();
+    await world.addonTick("hello");
+    await world.captureInto(link);
+    await world.addonPolls(2);
+
+    expect(receivedIds(await world.sim.info())).toEqual(["late-companion"]);
+  });
+
+  it("a re-sync re-creates the signal files, so the addon after a /reload reads only the ack slot and not the slots the companion emptied", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const link = world.startLink();
+    await converge(world, link);
+    await world.addonPolls(1);
+    for (const id of ["unread-1", "unread-2"]) {
+      expect(link.send(reply(id)).ok).toBe(true);
+      await link.idle();
+    }
+    expect(world.signalPresent(1)).toBe(false);
+    expect(world.signalPresent(2)).toBe(false);
+
+    await world.sim.command("load");
+    await world.captureInto(link);
+
+    expect(world.signalPresent(0)).toBe(false);
+    expect(world.signalPresent(1)).toBe(true);
+    expect(world.signalPresent(2)).toBe(true);
+    await world.addonPolls(6);
+    expect((await world.sim.info()).slot).toBe(2);
+
+    await world.addonTick("hello");
+    await world.captureInto(link);
+    await world.addonPolls(4);
+    const after = await world.sim.info();
+    expect(receivedIds(after)).toEqual(["unread-1", "unread-2"]);
+    expect(after.slot).toBe(3);
   });
 });

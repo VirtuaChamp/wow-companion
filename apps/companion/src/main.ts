@@ -23,7 +23,7 @@ import { createFsSlots } from "./adapters/fs-slots.ts";
 import { createScreenCaptureSource } from "./transport/capture.ts";
 import { GRID_MAX_DATA_ROWS, GRID_WIDTH } from "./transport/grid.ts";
 import { createScreenLink } from "./transport/screen-link.ts";
-import { EMPTY_WAV, SILENT_VALID_WAV } from "./transport/slots.ts";
+import { EMPTY_WAV } from "./transport/slots.ts";
 
 export type { Daemon, DaemonDeps };
 export { settingsFromConfig } from "./daemon/settings.ts";
@@ -151,7 +151,6 @@ async function main(): Promise<void> {
         }),
         fs: createFsSlots(),
         paths: slotPaths(config.wowPath),
-        validWav: SILENT_VALID_WAV,
         emptyWav: EMPTY_WAV,
         slotCount: config.slotCount,
         onCaptureError,

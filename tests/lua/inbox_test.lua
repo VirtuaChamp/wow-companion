@@ -74,9 +74,92 @@ do
   assert(paintCalls[2].seq == helloSeq, "hello keeps the same seq while its slot position is unchanged")
 end
 
+local SIGNAL_DIR = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\"
+local CONTROL_PRESENT = SIGNAL_DIR .. "ctl-present.wav"
+local CONTROL_GONE = SIGNAL_DIR .. "ctl-gone.wav"
+local SLOT_1_SIGNAL = SIGNAL_DIR .. "001.wav"
+
+local function countMatching(pattern)
+  local count = 0
+  for i = 1, #printed do
+    if printed[i]:find(pattern, 1, true) then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+do
+  local before = #printed
+  local ok = pcall(WoWCompanion_Deliver, nil, nil)
+  assert(ok, "a placeholder slot (WoWCompanion_Deliver(nil, nil)) raises nothing")
+  local handled = 0
+  ns.Transport.onMessage(function()
+    handled = handled + 1
+  end)
+  WoWCompanion_Deliver(nil, nil)
+  WoWCompanion_Deliver(nil, {})
+  WoWCompanion_Deliver("not-the-session", { { t = "state", seq = 1 } })
+  assert(handled == 0, "a placeholder or foreign-session delivery reaches no handler")
+  assert(#printed == before, "a placeholder slot prints nothing")
+end
+
+do
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(SLOT_1_SIGNAL, false)
+  for _ = 1, 5 do
+    tickPoll()
+  end
+  assert(_G.WOWC_TEST_LOADED_ADDONS == nil, "self-test: with ctl-gone still present the addon waits and reads no slot even when a slot signal is absent")
+  assert(countMatching("reply signals not working") == 0, "self-test: waiting for the companion to delete ctl-gone prints nothing")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(SLOT_1_SIGNAL, true)
+end
+
+do
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(CONTROL_GONE, false)
+  for _ = 1, 20 do
+    tickPoll()
+  end
+  assert(_G.WOWC_TEST_LOADED_ADDONS == nil, "field bug: with every slot signal file present and nothing written, no slot addon is loaded")
+  assert(_G.WOWC_TEST_ENABLED_ADDONS == nil, "field bug: no slot addon is enabled while every slot signal file is present")
+  assert(ns.Transport.slotsLeft() == 200, "field bug: the slot position stays at the first slot while every slot signal file is present")
+  assert(countMatching("failed to load reply slot") == 0, "field bug: no slot load failure is reported")
+  assert(countMatching("is empty") == 0, "field bug: no empty-file error is reported")
+end
+
+do
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(CONTROL_PRESENT, false)
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(SLOT_1_SIGNAL, false)
+  for _ = 1, 5 do
+    tickPoll()
+  end
+  assert(_G.WOWC_TEST_LOADED_ADDONS == nil, "self-test: with ctl-present missing the client cannot be trusted and no slot is read")
+  assert(countMatching("reply signals not working on this client, restart the game after setup") == 1, "self-test: the warning is printed once, not on every tick")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(CONTROL_PRESENT, true)
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(SLOT_1_SIGNAL, true)
+end
+
+do
+  local issuedBefore = #_G.WOWC_TEST_ISSUED_SOUND_HANDLES
+  local stoppedBefore = #_G.WOWC_TEST_STOPPED_SOUND_HANDLES
+  tickPoll()
+  local issued = {}
+  for i = issuedBefore + 1, #_G.WOWC_TEST_ISSUED_SOUND_HANDLES do
+    table.insert(issued, _G.WOWC_TEST_ISSUED_SOUND_HANDLES[i])
+  end
+  local stopped = {}
+  for i = stoppedBefore + 1, #_G.WOWC_TEST_STOPPED_SOUND_HANDLES do
+    table.insert(stopped, _G.WOWC_TEST_STOPPED_SOUND_HANDLES[i])
+  end
+  assert(#issued == 2, "each present signal file probed returns a sound handle (ctl-present and slot 1)")
+  assert(#stopped == #issued, "StopSound is called once per handle a present file returned")
+  for i = 1, #issued do
+    assert(stopped[i] == issued[i], "StopSound receives the very handle PlaySoundFile returned")
+  end
+end
+
 do
   local sigPath = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\001.wav"
-  _G.WOWC_TEST_SET_SIGNAL(sigPath, "RIFF")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(sigPath, false)
   tickPoll()
   assert(_G.WOWC_TEST_LOADED_ADDONS[1] == "WoWCompanion_R001", "a reload during which the addon passed slot 1 advances its own position")
 
@@ -90,7 +173,9 @@ end
 
 do
   local helloSeq = paintCalls[#paintCalls].seq
+  local probesBefore = _G.WOWC_TEST_SIGNAL_PROBES[CONTROL_GONE]
   WoWCompanion_Deliver(ns.Transport.session(), { { t = "ack", seq = helloSeq } })
+  assert(_G.WOWC_TEST_SIGNAL_PROBES[CONTROL_GONE] > probesBefore, "self-test: the check runs again when the hello is acked")
   local before = #paintCalls
   tickRepaint()
   assert(#paintCalls == before, "acking hello stops its re-paint")
@@ -225,9 +310,9 @@ do
       WoWCompanion_Deliver(ns.Transport.session(), { { t = "state", seq = 99 } })
     end,
   }
-  _G.WOWC_TEST_SET_SIGNAL(sigPath, "RIFF")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(sigPath, false)
   tickPoll()
-  assert(runnerFired, "a valid signal loads and runs the matching slot addon")
+  assert(runnerFired, "an absent signal file loads and runs the matching slot addon")
   assert(_G.WOWC_TEST_ENABLED_ADDONS[2] == "WoWCompanion_R002", "the addon is enabled before load")
   assert(_G.WOWC_TEST_LOADED_ADDONS[2] == "WoWCompanion_R002", "the addon is loaded once ready")
 end
@@ -236,7 +321,7 @@ do
   _G.WOWC_TEST_ADDON_LOAD_RESULTS = { WoWCompanion_R003 = { false, "DISABLED" } }
   local before = ns.Transport.slotsLeft()
   local sigPath = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\003.wav"
-  _G.WOWC_TEST_SET_SIGNAL(sigPath, "RIFF")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(sigPath, false)
   tickPoll()
   assert(ns.Transport.slotsLeft() == before, "a LoadAddOn failure does not advance the slot position")
   local sawFailure = false
@@ -254,7 +339,7 @@ end
 do
   for i = 4, 180 do
     local path = ("Interface\\AddOns\\WoWCompanion_Signals\\sig\\%03d.wav"):format(i)
-    _G.WOWC_TEST_SET_SIGNAL(path, "RIFF")
+    _G.WOWC_TEST_SET_SIGNAL_PRESENT(path, false)
     tickPoll()
   end
   local sawWarning = false
@@ -269,7 +354,7 @@ end
 do
   for i = 181, 200 do
     local path = ("Interface\\AddOns\\WoWCompanion_Signals\\sig\\%03d.wav"):format(i)
-    _G.WOWC_TEST_SET_SIGNAL(path, "RIFF")
+    _G.WOWC_TEST_SET_SIGNAL_PRESENT(path, false)
     tickPoll()
   end
   tickPoll()
@@ -390,7 +475,7 @@ do
   local firstSeq = paintCallsB[1].seq
 
   local sigPathB = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\001.wav"
-  _G.WOWC_TEST_SET_SIGNAL(sigPathB, "RIFF")
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT(sigPathB, false)
   allCallbacks[pollIndexB].callback()
 
   allCallbacks[repaintIndexB].callback()

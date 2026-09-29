@@ -101,16 +101,3 @@ export function switchableSource(current: () => string): FrameSource {
     close(): void {},
   };
 }
-
-export function latestSignal(
-  records: readonly { path: string; data: string | Uint8Array }[],
-  path: string,
-): Uint8Array | undefined {
-  for (let i = records.length - 1; i >= 0; i -= 1) {
-    const record = records[i];
-    if (record !== undefined && record.path === path && typeof record.data !== "string") {
-      return record.data;
-    }
-  }
-  return undefined;
-}
