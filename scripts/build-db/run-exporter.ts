@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { err, ok, type Result } from "../lib/result.ts";
+import { err, type Result } from "../lib/result.ts";
 import type { ExportedData } from "./rows.ts";
-import { validateExportedData } from "./validate.ts";
+import { sanitizeExportedData, type SanitizedExport } from "./sanitize.ts";
 
 export const DEFAULT_EXPORTER_TIMEOUT_MS = 120_000;
 export const DEFAULT_MEMORY_CEILING_KB = 512 * 1024;
@@ -34,7 +34,7 @@ export const runExporter = (
   areaMapPath: string,
   timeoutMs: number = DEFAULT_EXPORTER_TIMEOUT_MS,
   memoryCeilingKb: number = DEFAULT_MEMORY_CEILING_KB,
-): Result<ExportedData, string> => {
+): Result<SanitizedExport, string> => {
   if (!existsSync(dataForeverDir)) {
     return err(`expected checkout folder not found: ${dataForeverDir}`);
   }
@@ -72,9 +72,5 @@ export const runExporter = (
   if (!isExportedData(parsed)) {
     return err("lua exporter produced an unexpected data shape");
   }
-  const validationError = validateExportedData(parsed);
-  if (validationError !== null) {
-    return err(validationError);
-  }
-  return ok(parsed);
+  return sanitizeExportedData(parsed);
 };
