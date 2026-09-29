@@ -603,10 +603,12 @@ function parseOptionsMessage(
 function parseProgressMessage(
   value: Record<string, unknown>,
 ): Extract<CompanionToGame, { t: "progress" }> | undefined {
-  if (!isString(value.id) || !isOneOf(value.status, progressStatuses)) return undefined;
+  if (!isString(value.id) || !isString(value.chat) || !isOneOf(value.status, progressStatuses))
+    return undefined;
   const msg: Extract<CompanionToGame, { t: "progress" }> = {
     t: "progress",
     id: value.id,
+    chat: value.chat,
     status: value.status,
   };
   if (value.detail !== undefined) {
@@ -666,6 +668,10 @@ function parseErrorMessage(
   if (value.id !== undefined) {
     if (!isString(value.id)) return undefined;
     msg.id = value.id;
+  }
+  if (value.chat !== undefined) {
+    if (!isString(value.chat)) return undefined;
+    msg.chat = value.chat;
   }
   return msg;
 }

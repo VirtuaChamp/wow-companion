@@ -1,23 +1,72 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { EffortLevel, ModelInfo, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CanUseTool,
+  EffortLevel,
+  ModelInfo,
+  Options,
+  PermissionResult,
+  SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   CreateProvider,
   McpLaunch,
   Provider,
   ProviderError,
+  ProviderEvent,
   Result,
 } from "@wow-companion/contracts";
 
-const READ_ONLY_TOOLS = ["mcp__wowc__*", "WebSearch", "WebFetch"];
-const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit"];
+const READ_ONLY_TOOLS = ["mcp__wowc__*", "WebSearch"];
+const DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "WebFetch"];
+const ISOLATED_MCP: Options = {
+  strictMcpConfig: true,
+  env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "false" },
+};
 export const READ_ONLY_QUERY_OPTIONS: Options = {
   settingSources: [],
   tools: READ_ONLY_TOOLS,
   disallowedTools: DISALLOWED_TOOLS,
   allowedTools: READ_ONLY_TOOLS,
   permissionPrompts: "none",
+  ...ISOLATED_MCP,
 };
 const DESCRIBE_OPTIONS: Options = READ_ONLY_QUERY_OPTIONS;
+const WEB_DOMAINS: readonly string[] = ["wowhead.com", "warcraft.wiki.gg", "icy-veins.com"];
+
+function webPermission(toolName: string, input: Record<string, unknown>): PermissionResult {
+  if (toolName === "WebFetch") {
+    return { behavior: "deny", message: "Web pages cannot be fetched; use WebSearch." };
+  }
+  if (toolName === "WebSearch") {
+    const { blocked_domains: _dropped, ...rest } = input;
+    return { behavior: "allow", updatedInput: { ...rest, allowed_domains: [...WEB_DOMAINS] } };
+  }
+  return { behavior: "deny", message: "This tool is not available." };
+}
+
+const RUN_OPTIONS: Options = {
+  ...READ_ONLY_QUERY_OPTIONS,
+  allowedTools: ["mcp__wowc__*"],
+  permissionPrompts: "host",
+};
+
+function reportingCanUseTool(onEvent: (e: ProviderEvent) => void): CanUseTool {
+  return async (toolName, input) => {
+    const decision = webPermission(toolName, input);
+    if (decision.behavior === "deny") {
+      onEvent({ kind: "tool", name: toolName, failure: decision.message });
+    }
+    return decision;
+  };
+}
+const NO_TOOLS_QUERY_OPTIONS: Options = {
+  settingSources: [],
+  tools: [],
+  disallowedTools: DISALLOWED_TOOLS,
+  allowedTools: [],
+  permissionPrompts: "none",
+  ...ISOLATED_MCP,
+};
 
 type MinimalQuery = AsyncIterable<SDKMessage> & {
   supportedModels(): Promise<ModelInfo[]>;
@@ -119,9 +168,10 @@ export function createClaudeWith(queryFn: QueryFn): CreateProvider {
         if (input.signal.aborted) {
           return { ok: false, error: "cancelled" };
         }
-        let launch: McpLaunch;
+        const noTools = input.tools === "none";
+        let launch: McpLaunch | undefined;
         try {
-          launch = config.mcp(input.runId);
+          launch = noTools ? undefined : config.mcp(input.runId);
         } catch {
           return { ok: false, error: "provider_failed" };
         }
@@ -148,16 +198,22 @@ export function createClaudeWith(queryFn: QueryFn): CreateProvider {
               ...(input.sessionId !== undefined ? { resume: input.sessionId } : {}),
               model: input.model,
               ...(effort !== undefined ? { effort } : {}),
-              ...DESCRIBE_OPTIONS,
+              ...(noTools
+                ? NO_TOOLS_QUERY_OPTIONS
+                : { ...RUN_OPTIONS, canUseTool: reportingCanUseTool(onEvent) }),
               abortController,
-              mcpServers: {
-                wowc: {
-                  type: "stdio",
-                  command: launch.command,
-                  args: launch.args,
-                  env: launch.env,
-                },
-              },
+              ...(launch === undefined
+                ? {}
+                : {
+                    mcpServers: {
+                      wowc: {
+                        type: "stdio",
+                        command: launch.command,
+                        args: launch.args,
+                        env: launch.env,
+                      },
+                    },
+                  }),
             },
           });
           for await (const message of q) {

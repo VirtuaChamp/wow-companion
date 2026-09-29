@@ -296,4 +296,13 @@ _G.C_Timer = {
     _G.WOWC_TEST_TIMER_CALLBACKS = _G.WOWC_TEST_TIMER_CALLBACKS or {}
     table.insert(_G.WOWC_TEST_TIMER_CALLBACKS, { seconds = seconds, callback = callback })
   end,
+  NewTicker = function(seconds, callback)
+    _G.WOWC_TEST_TICKERS = _G.WOWC_TEST_TICKERS or {}
+    local ticker = { seconds = seconds, callback = callback, cancelled = false }
+    function ticker:Cancel()
+      self.cancelled = true
+    end
+    table.insert(_G.WOWC_TEST_TICKERS, ticker)
+    return ticker
+  end,
 }

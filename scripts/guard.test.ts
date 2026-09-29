@@ -1,11 +1,23 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runGuard } from "./lib/guard-core.ts";
-import { walkFiles } from "./lib/list-files.ts";
+import { listTrackedFiles, walkFiles } from "./lib/list-files.ts";
 
 const dirs: string[] = [];
+
+const listedAfterDeletingOneTrackedFile = (): string[] => {
+  const root = mkdtempSync(join(tmpdir(), "guard-list-"));
+  dirs.push(root);
+  spawnSync("git", ["init", "-q"], { cwd: root });
+  writeFileSync(join(root, "kept.ts"), "export const kept = 1;\n");
+  writeFileSync(join(root, "gone.ts"), "export const gone = 1;\n");
+  spawnSync("git", ["add", "-A"], { cwd: root });
+  rmSync(join(root, "gone.ts"));
+  return listTrackedFiles(root).map((file) => file.relPath);
+};
 
 const makeFixture = (): string => {
   const dir = mkdtempSync(join(tmpdir(), "guard-fixture-"));
@@ -209,6 +221,42 @@ describe("guard.detects", () => {
         (v) => v.rule === "no protected addon calls" && v.file === "addon/WoWCompanion/Bad.lua",
       ),
     ).toBe(true);
+  });
+
+  it("detects a StaticPopup reference in an addon Lua file", () => {
+    const root = makeFixture();
+    baseCleanTree(root);
+    writeFile(root, "addon/WoWCompanion/Bad.lua", "StaticPopup_Show('X')\n");
+    const violations = runGuard(walkFiles(root));
+    expect(
+      violations.some(
+        (v) =>
+          v.rule === "no shared Blizzard dialog or hook in the addon" &&
+          v.file === "addon/WoWCompanion/Bad.lua",
+      ),
+    ).toBe(true);
+  });
+
+  it("detects hooksecurefunc and StaticPopupDialogs writes in an addon Lua file", () => {
+    const root = makeFixture();
+    baseCleanTree(root);
+    writeFile(root, "addon/WoWCompanion/Hook.lua", "hooksecurefunc('SetItemRef', f)\n");
+    writeFile(root, "addon/WoWCompanion/Dialog.lua", "StaticPopupDialogs['X'] = {}\n");
+    const flagged = runGuard(walkFiles(root))
+      .filter((v) => v.rule === "no shared Blizzard dialog or hook in the addon")
+      .map((v) => v.file)
+      .sort();
+    expect(flagged).toEqual(["addon/WoWCompanion/Dialog.lua", "addon/WoWCompanion/Hook.lua"]);
+  });
+
+  it("ignores those names outside addon Lua files", () => {
+    const root = makeFixture();
+    baseCleanTree(root);
+    writeFile(root, "docs/notes.md", "StaticPopup is banned; hooksecurefunc too.\n");
+    const violations = runGuard(walkFiles(root));
+    expect(
+      violations.some((v) => v.rule === "no shared Blizzard dialog or hook in the addon"),
+    ).toBe(false);
   });
 
   it("detects a deprecated chat global", () => {
@@ -648,5 +696,11 @@ describe("guard.detects", () => {
     writeFile(root, "apps/companion/src/io.ts", "import { readFileSync } from 'fs';\n");
     const violations = runGuard(walkFiles(root));
     expect(violations.filter((v) => v.rule === "packages/contracts does no Node I/O")).toEqual([]);
+  });
+});
+
+describe("guard.listTrackedFiles", () => {
+  it("skips a tracked file deleted in the working tree and still lists an existing one", () => {
+    expect(listedAfterDeletingOneTrackedFile()).toEqual(["kept.ts"]);
   });
 });

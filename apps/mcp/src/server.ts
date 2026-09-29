@@ -93,7 +93,8 @@ export function createServer(deps: { readonly db: Db; readonly localApi: LocalAp
   server.registerTool(
     "set_waypoint",
     {
-      description: "Set a map waypoint for the ask currently running.",
+      description:
+        "Offer a map waypoint to the player for the ask currently running; it is set only when the player clicks it.",
       inputSchema: {
         uiMapId: z.number(),
         x: z.number().min(0).max(100),

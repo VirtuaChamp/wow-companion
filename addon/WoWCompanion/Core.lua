@@ -86,6 +86,10 @@ loaderFrame:SetScript("OnEvent", function(_, event, loadedAddonName)
   if event == "ADDON_LOADED" and loadedAddonName == addonName then
     WoWCompanionDB = WoWCompanionDB or {}
     ns.AiWindow.create()
+    if ns.MinimapButton then
+      ns.MinimapButton.create()
+      ns.MinimapButton.registerCompartment()
+    end
     ns.Transport.onMessage(dispatchTransport)
   end
 end)

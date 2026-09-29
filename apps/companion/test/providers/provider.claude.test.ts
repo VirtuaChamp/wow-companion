@@ -36,8 +36,14 @@ describe("provider.claude", () => {
       },
       () => {},
     );
-    expect(seenOptions?.tools).toEqual(["mcp__wowc__*", "WebSearch", "WebFetch"]);
-    expect(seenOptions?.disallowedTools).toEqual(["Bash", "Edit", "Write", "NotebookEdit"]);
+    expect(seenOptions?.tools).toEqual(["mcp__wowc__*", "WebSearch"]);
+    expect(seenOptions?.disallowedTools).toEqual([
+      "Bash",
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "WebFetch",
+    ]);
     expect(seenOptions?.settingSources).toEqual([]);
   });
 
@@ -316,5 +322,200 @@ describe("provider.claude", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).not.toBe("session_unknown");
+  });
+
+  test("provider.claude.tools_none launches with no MCP server and no allowed tools, default unchanged", async () => {
+    const seen: (Options | undefined)[] = [];
+    const mcpCalls: string[] = [];
+    const config: ProviderConfig = {
+      ...baseConfig(),
+      mcp: (runId: string) => {
+        mcpCalls.push(runId);
+        return { command: "node", args: ["stub.js"], env: { WOWC_RUN: runId } };
+      },
+    };
+    const provider = createClaudeWith(fakeQuery([], { onCall: (options) => seen.push(options) }))(
+      config,
+    );
+    const input = {
+      runId: "run-t",
+      prompt: "title please",
+      system: "test",
+      model: "claude-sonnet-5",
+      signal: new AbortController().signal,
+    };
+    await provider.run({ ...input, tools: "none" }, () => {});
+    await provider.run(input, () => {});
+    expect(seen[0]?.mcpServers).toBeUndefined();
+    expect(seen[0]?.tools).toEqual([]);
+    expect(seen[0]?.allowedTools).toEqual([]);
+    expect(seen[0]?.disallowedTools).toEqual(["Bash", "Edit", "Write", "NotebookEdit", "WebFetch"]);
+    expect(seen[1]?.mcpServers).toBeDefined();
+    expect(seen[1]?.tools).toEqual(["mcp__wowc__*", "WebSearch"]);
+    expect(mcpCalls).toEqual(["run-t"]);
+  });
+  test("provider.claude.web WebFetch is absent and denied: no redirect can leave the three sites", async () => {
+    let seenOptions: Options | undefined;
+    const provider = createClaudeWith(
+      fakeQuery([], { onCall: (options) => (seenOptions = options) }),
+    )(baseConfig());
+    await provider.run(
+      {
+        runId: "run-web",
+        prompt: "p",
+        system: "test",
+        model: "claude-sonnet-5",
+        signal: new AbortController().signal,
+      },
+      () => {},
+    );
+    expect(seenOptions?.tools).not.toContain("WebFetch");
+    expect(seenOptions?.allowedTools).not.toContain("WebFetch");
+    expect(seenOptions?.disallowedTools).toContain("WebFetch");
+    const decide = seenOptions?.canUseTool;
+    if (decide === undefined) throw new Error("expected a permission callback");
+    const context = {
+      signal: new AbortController().signal,
+      toolUseID: "tool-1",
+      requestId: "request-1",
+    };
+    for (const url of [
+      "https://www.wowhead.com/npc=1234/hogger",
+      "https://warcraft.wiki.gg/wiki/Hogger",
+      "https://www.icy-veins.com/wow/guide",
+      "https://example.com/",
+    ]) {
+      expect(await decide("WebFetch", { url, prompt: "x" }, context), url).toMatchObject({
+        behavior: "deny",
+      });
+    }
+    expect(await decide("Bash", { command: "ls" }, context)).toMatchObject({ behavior: "deny" });
+    expect(await decide("mcp__claude_ai_Gmail__search_threads", {}, context)).toMatchObject({
+      behavior: "deny",
+    });
+  });
+
+  test("provider.claude.mcp every Claude run loads only the wowc MCP server, never account connectors", async () => {
+    const seen: (Options | undefined)[] = [];
+    const provider = createClaudeWith(fakeQuery([], { onCall: (options) => seen.push(options) }))(
+      baseConfig(),
+    );
+    const input = {
+      runId: "run-mcp",
+      prompt: "p",
+      system: "test",
+      model: "claude-sonnet-5",
+      signal: new AbortController().signal,
+    };
+    await provider.run(input, () => {});
+    await provider.run({ ...input, tools: "none" }, () => {});
+    await provider.describe();
+    expect(seen).toHaveLength(3);
+    for (const options of seen) {
+      expect(options?.strictMcpConfig).toBe(true);
+      expect(options?.env?.["ENABLE_CLAUDEAI_MCP_SERVERS"]).toBe("false");
+      expect(options?.settingSources).toEqual([]);
+    }
+    expect(Object.keys(seen[0]?.mcpServers ?? {})).toEqual(["wowc"]);
+    expect(seen[1]?.mcpServers).toBeUndefined();
+    expect(seen[2]?.mcpServers).toBeUndefined();
+  });
+
+  test("provider.claude.web pins every WebSearch to the three sites and drops blocked_domains", async () => {
+    let seenOptions: Options | undefined;
+    const provider = createClaudeWith(
+      fakeQuery([], { onCall: (options) => (seenOptions = options) }),
+    )(baseConfig());
+    await provider.run(
+      {
+        runId: "run-search",
+        prompt: "p",
+        system: "test",
+        model: "claude-sonnet-5",
+        signal: new AbortController().signal,
+      },
+      () => {},
+    );
+    const decide = seenOptions?.canUseTool;
+    if (decide === undefined) throw new Error("expected a permission callback");
+    const decision = await decide(
+      "WebSearch",
+      { query: "hogger", allowed_domains: ["example.com"], blocked_domains: ["x.example"] },
+      { signal: new AbortController().signal, toolUseID: "tool-2", requestId: "request-2" },
+    );
+    expect(decision).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        query: "hogger",
+        allowed_domains: ["wowhead.com", "warcraft.wiki.gg", "icy-veins.com"],
+      },
+    });
+    expect(seenOptions?.allowedTools).toEqual(["mcp__wowc__*"]);
+    expect(seenOptions?.permissionPrompts).toBe("host");
+  });
+
+  test("provider.claude.web the title run (tools none) has no tools and no permission callback", async () => {
+    let seenOptions: Options | undefined;
+    const provider = createClaudeWith(
+      fakeQuery([], { onCall: (options) => (seenOptions = options) }),
+    )(baseConfig());
+    await provider.run(
+      {
+        runId: "run-title",
+        prompt: "p",
+        system: "test",
+        model: "claude-sonnet-5",
+        tools: "none",
+        signal: new AbortController().signal,
+      },
+      () => {},
+    );
+    expect(seenOptions?.tools).toEqual([]);
+    expect(seenOptions?.allowedTools).toEqual([]);
+    expect(seenOptions?.canUseTool).toBeUndefined();
+    expect(seenOptions?.permissionPrompts).toBe("none");
+  });
+
+  test("provider.claude.web a refused fetch is emitted as a tool event that carries the failure", async () => {
+    const messages = loadJsonFixture<SDKMessage[]>(fixturePath("fixtures/claude/stream.json"));
+    const context = {
+      signal: new AbortController().signal,
+      toolUseID: "tool-9",
+      requestId: "request-9",
+    };
+    const queryFn = (params: { prompt: string; options?: Options }) => {
+      const decide = params.options?.canUseTool;
+      async function* generate(): AsyncGenerator<SDKMessage> {
+        if (decide === undefined) throw new Error("expected a permission callback");
+        await decide("WebFetch", { url: "https://www.reddit.com/r/wow", prompt: "x" }, context);
+        for (const message of messages) yield message;
+      }
+      const iterator = generate();
+      return {
+        [Symbol.asyncIterator]: () => iterator,
+        async supportedModels(): Promise<ModelInfo[]> {
+          return [];
+        },
+        close() {},
+      };
+    };
+    const events: ProviderEvent[] = [];
+    const provider = createClaudeWith(queryFn)(baseConfig());
+    await provider.run(
+      {
+        runId: "run-deny",
+        prompt: "p",
+        system: "test",
+        model: "claude-sonnet-5",
+        signal: new AbortController().signal,
+      },
+      (event) => events.push(event),
+    );
+    const webEvents = events.filter((event) => event.kind === "tool" && event.name === "WebFetch");
+    expect(webEvents).toHaveLength(1);
+    expect(webEvents[0]).toMatchObject({ kind: "tool", name: "WebFetch" });
+    expect(webEvents[0] && "failure" in webEvents[0] ? webEvents[0].failure : undefined).toContain(
+      "use WebSearch",
+    );
   });
 });

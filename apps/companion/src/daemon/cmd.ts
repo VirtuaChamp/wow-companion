@@ -46,6 +46,7 @@ export function onCmd(ctx: DaemonContext, msg: Extract<GameToCompanion, { t: "cm
         newChatName(ctx, msg.arg),
         ctx.state.settings.global.provider,
         ctx.now(),
+        msg.arg !== undefined && msg.arg.trim() !== "" ? "user" : "auto",
       );
       break;
     case "open":

@@ -137,10 +137,11 @@ export function createCursorWith(
           return { ok: false, error: "cancelled" };
         }
         let runDir: string;
+        const noTools = input.tools === "none";
         let launch: McpLaunch;
         try {
           runDir = runDirFor(config.cwd, input.runId);
-          launch = config.mcp(input.runId);
+          launch = noTools ? { command: "", args: [], env: {} } : config.mcp(input.runId);
         } catch {
           return { ok: false, error: "provider_failed" };
         }
@@ -154,7 +155,8 @@ export function createCursorWith(
         let failure: ProviderError | undefined;
         let stderrText = "";
         try {
-          writeMcpConfig(runDir, launch);
+          if (noTools) mkdirSync(runDir, { recursive: true });
+          else writeMcpConfig(runDir, launch);
           const prompt = input.system ? `${input.system}\n\n${input.prompt}` : input.prompt;
           const args = cursorArgs({ prompt, model: input.model, workspace: runDir });
           const outcome = await run("cursor-agent", args, {

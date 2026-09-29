@@ -144,7 +144,9 @@ describe("daemon.chats", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const busy = harness.link.sent().filter((msg) => msg.t === "error");
-    expect(busy).toEqual([{ t: "error", id: "a2", code: "busy", message: expect.any(String) }]);
+    expect(busy).toEqual([
+      { t: "error", id: "a2", chat: "default", code: "busy", message: expect.any(String) },
+    ]);
     expect(blocked.seen.map((input) => input.prompt).sort()).toEqual(["one", "three"]);
     blocked.release();
     await new Promise((resolve) => setTimeout(resolve, 30));
@@ -161,7 +163,9 @@ describe("daemon.chats", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const errors = harness.link.sent().filter((msg) => msg.t === "error");
-    expect(errors).toEqual([{ t: "error", id: "a1", code: "cancelled", message: "cancelled" }]);
+    expect(errors).toEqual([
+      { t: "error", id: "a1", chat: "default", code: "cancelled", message: "cancelled" },
+    ]);
   });
 
   it("delete on a running chat answers busy", async () => {

@@ -11,7 +11,7 @@ import type {
 } from "@wow-companion/contracts";
 import { vi } from "vitest";
 import type { ChatsState } from "../../src/core/chats.ts";
-import { emptyChatsState } from "../../src/core/chats.ts";
+import { createChat, emptyChatsState } from "../../src/core/chats.ts";
 import type { Settings } from "../../src/core/settings.ts";
 import type { Config } from "../../src/config.ts";
 import { createDaemon, settingsFromConfig } from "../../src/main.ts";
@@ -81,6 +81,12 @@ export function okRun(text: string): RunFn {
   return async () => ({ ok: true, value: { sessionId: "s-1", text } });
 }
 
+function chatsWithUserTitledDefault(): ChatsState {
+  const seeded = createChat(emptyChatsState, "default", "Default", "claude", 1000, "user");
+  if (!seeded.ok) throw new Error("seed failed");
+  return seeded.value.state;
+}
+
 export type Harness = {
   daemon: Daemon;
   link: ReturnType<typeof createMemoryLink>;
@@ -103,7 +109,7 @@ export function startDaemon(
     link,
     config,
     providers: new Map([["claude", fakeProvider("claude", okRun("pong"))]]),
-    initialChats: emptyChatsState,
+    initialChats: chatsWithUserTitledDefault(),
     initialSettings: settingsFromConfig(config),
     initialGame: {},
     settingsStore: {

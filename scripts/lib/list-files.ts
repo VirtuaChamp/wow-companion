@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { ListedFile } from "./guard-core.ts";
 
@@ -18,7 +18,8 @@ export const listTrackedFiles = (rootDir: string): ListedFile[] => {
   return result.stdout
     .split(/\r?\n/)
     .filter((line) => line.length > 0)
-    .map((line) => ({ relPath: toPosix(line), absPath: join(rootDir, line) }));
+    .map((line) => ({ relPath: toPosix(line), absPath: join(rootDir, line) }))
+    .filter((file) => existsSync(file.absPath));
 };
 
 export const walkFiles = (rootDir: string): ListedFile[] => {

@@ -55,6 +55,7 @@ export function createSender(link: GameLink, log: (line: string) => void): Sende
           const notice = link.send({
             t: "error",
             id: msg.id,
+            chat: msg.chat,
             code: "too_large",
             message: "the reply is too large to deliver",
           });

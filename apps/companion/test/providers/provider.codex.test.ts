@@ -649,4 +649,62 @@ describe("provider.codex", () => {
     );
     expect(result).toEqual({ ok: false, error: "provider_failed" });
   });
+
+  test("provider.codex.tools_none passes no mcp_servers override, default unchanged", async () => {
+    const seen: string[][] = [];
+    const capture: Parameters<typeof createCodexWith>[0] = async (_command, args, _options) => {
+      seen.push(args);
+      return { outcome: "exit", code: 0 };
+    };
+    const provider = createCodexWith(capture, fakeCheckInstalled(true))(baseConfig());
+    const input = {
+      runId: "run-t",
+      prompt: "title please",
+      system: "test",
+      model: "gpt-5.1-codex",
+      signal: new AbortController().signal,
+    };
+    await provider.run({ ...input, tools: "none" }, () => {});
+    await provider.run(input, () => {});
+    expect(seen[0]?.some((arg) => arg.includes("mcp_servers"))).toBe(false);
+    expect(seen[0]).toContain("read-only");
+    expect(seen[1]?.some((arg) => arg.includes("mcp_servers.wowc.command"))).toBe(true);
+  });
+
+  test("provider.codex.tools_none argv builder omits every mcp override", () => {
+    const args = codexArgs({
+      prompt: "p",
+      model: "gpt-5.1-codex",
+      mcpCommand: "",
+      mcpArgs: [],
+      mcpEnv: {},
+      noMcp: true,
+    });
+    expect(args.some((arg) => arg.includes("mcp_servers"))).toBe(false);
+  });
+  test("provider.codex.web turns the web search tool off in every run", async () => {
+    const seen: string[][] = [];
+    const capture: Parameters<typeof createCodexWith>[0] = async (_command, args, _options) => {
+      seen.push(args);
+      return { outcome: "exit", code: 0 };
+    };
+    const provider = createCodexWith(capture, fakeCheckInstalled(true))(baseConfig());
+    const input = {
+      runId: "run-web",
+      prompt: "p",
+      system: "test",
+      model: "gpt-5.1-codex",
+      signal: new AbortController().signal,
+    };
+    await provider.run(input, () => {});
+    await provider.run({ ...input, tools: "none" }, () => {});
+    await provider.run({ ...input, sessionId: "sess" }, () => {});
+    for (const args of seen) {
+      const at = args.indexOf('web_search="disabled"');
+      expect(at).toBeGreaterThan(0);
+      expect(args[at - 1]).toBe("-c");
+      expect(args.filter((arg) => arg.startsWith("web_search")).length).toBe(1);
+      expect(args).not.toContain("--search");
+    }
+  });
 });

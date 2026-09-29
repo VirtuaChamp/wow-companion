@@ -31,6 +31,8 @@ local function newRegion(kind)
     cursor = 0,
     focused = false,
     registeredEvents = {},
+    texturePath = false,
+    atlas = false,
   }
   return setmetatable(obj, mockMeta)
 end
@@ -428,6 +430,12 @@ local function newColor(r, g, b)
   function color:GetRGB()
     return self.r, self.g, self.b
   end
+  function color:WrapTextInColorCode(text)
+    local function byte(value)
+      return math.floor(value * 255 + 0.5)
+    end
+    return ("|cff%02x%02x%02x%s|r"):format(byte(self.r), byte(self.g), byte(self.b), text)
+  end
   return color
 end
 
@@ -447,43 +455,342 @@ local function newDescription(owner, text, onClick)
   return description
 end
 
-local function installDropdown(dropdown)
-  function dropdown:SetupMenu(generator)
-    self.menuGenerator = generator
-    local root = newDescription(self, nil, nil)
-    function root:CreateTitle(text)
-      table.insert(self.children, { title = text })
-    end
-    function root:CreateDivider()
-      table.insert(self.children, { divider = true })
-    end
-    generator(self, root)
-    self.menuButtons = root.children
-  end
-  function dropdown:OverrideText(text)
-    if not text then
-      return
-    end
-    self.disableSelectionText = true
-    self:SetText(text)
-  end
-  function dropdown:UpdateToMenuSelections()
-    if self.disableSelectionText then
-      return
-    end
-    self:SetText(self.defaultText)
-  end
-  function dropdown:CloseMenu()
-    self:UpdateToMenuSelections()
+_G.WOWC_TEST_NEW_MENU_DESCRIPTION = newDescription
+
+function methods:SetTexture(path)
+  self.texturePath = path
+end
+
+function methods:SetHighlightTexture(path, blendMode)
+  self.highlightTexturePath = path
+  self.highlightBlendMode = blendMode
+end
+
+function methods:GetCenter()
+  return self.centerX or 0, self.centerY or 0
+end
+
+function methods:SetShown(flag)
+  if flag then
+    self:Show()
+  else
+    self:Hide()
   end
 end
 
-local function installPopupDialog(dialog)
-  dialog.EditBox = newRegion("EditBox")
-  function dialog:GetEditBox()
-    return self.EditBox
+function methods:SetAlpha(alpha)
+  self.alpha = alpha
+end
+
+function methods:GetAlpha()
+  return self.alpha or 1
+end
+
+function methods:SetWordWrap(flag)
+  self.wordWrap = flag
+end
+
+function methods:RegisterForClicks(...)
+  self.clickRegistrations = { ... }
+end
+
+function methods:SetBackdropColor(r, g, b, a)
+  self.backdropColor = { r = r, g = g, b = b, a = a }
+end
+
+local function newDataProvider(initial)
+  local provider = { collection = {}, listeners = {} }
+  local function changed()
+    for _, listener in ipairs(provider.listeners) do
+      listener()
+    end
+  end
+  function provider:Insert(...)
+    for i = 1, select("#", ...) do
+      table.insert(self.collection, (select(i, ...)))
+    end
+    changed()
+  end
+  function provider:InsertTable(tbl)
+    for _, value in ipairs(tbl) do
+      table.insert(self.collection, value)
+    end
+  end
+  function provider:Remove(element)
+    for index, value in ipairs(self.collection) do
+      if value == element then
+        table.remove(self.collection, index)
+        changed()
+        return index
+      end
+    end
+  end
+  function provider:RemoveIndex(index)
+    table.remove(self.collection, index)
+    changed()
+  end
+  function provider:Flush()
+    self.collection = {}
+    changed()
+  end
+  function provider:GetSize()
+    return #self.collection
+  end
+  function provider:GetCollection()
+    return self.collection
+  end
+  function provider:Find(index)
+    return self.collection[index]
+  end
+  function provider:FindIndex(element)
+    for index, value in ipairs(self.collection) do
+      if value == element then
+        return index
+      end
+    end
+  end
+  if initial then
+    provider:InsertTable(initial)
+  end
+  return provider
+end
+
+_G.CreateDataProvider = function(initial)
+  return newDataProvider(initial)
+end
+
+_G.ScrollBoxConstants = {
+  NoScrollInterpolation = true,
+  RetainScrollPosition = true,
+  DiscardScrollPosition = false,
+  ScrollEnd = 1 - 0.00001,
+}
+
+_G.BaseScrollBoxEvents = { OnSizeChanged = "OnSizeChanged", OnScroll = "OnScroll" }
+
+_G.ScrollControllerMixin = { Directions = { Increase = 1, Decrease = -1 } }
+
+_G.CreateScrollBoxListLinearView = function(top, bottom, left, right, spacing)
+  local view = { top = top or 0, bottom = bottom or 0, left = left or 0, right = right or 0, spacing = spacing or 0 }
+  function view:SetElementInitializer(template, initializer)
+    self.elementFactory = function(factory)
+      factory(template, initializer)
+    end
+  end
+  function view:SetElementFactory(factory)
+    self.elementFactory = factory
+  end
+  function view:SetElementExtent(extent)
+    self.elementExtent = extent
+  end
+  function view:SetPadding(newTop, newBottom, newLeft, newRight, newSpacing)
+    self.top, self.bottom, self.left, self.right, self.spacing = newTop, newBottom, newLeft, newRight, newSpacing
+  end
+  function view:SetElementExtentCalculator(calculator)
+    self.extentCalculator = calculator
+  end
+  return view
+end
+
+local function frameTypeForTemplate(template)
+  if template == "Frame" or template == "Button" then
+    return template
+  end
+  return "Frame"
+end
+
+local function installScrollBox(box)
+  box.frames = {}
+  box.view = false
+  box.provider = newDataProvider()
+  box.callbacks = {}
+  box.scrollPercentage = 0
+  box.scrollEndCalls = 0
+  box.rebuildCount = 0
+  box.wheelLog = {}
+  box.pageLog = {}
+  box.ScrollTarget = newRegion("Frame")
+
+  local function elementExtent(index, data)
+    local view = box.view
+    if view.elementExtent then
+      return view.elementExtent
+    end
+    return view.extentCalculator(index, data)
+  end
+
+  local function totalExtent()
+    local view = box.view
+    if not view then
+      return 0
+    end
+    local total = view.top + view.bottom
+    for index, data in ipairs(box.provider.collection) do
+      total = total + elementExtent(index, data)
+      if index > 1 then
+        total = total + view.spacing
+      end
+    end
+    return total
+  end
+
+  local function acquire(index, data)
+    local view = box.view
+    local template, initializer
+    view.elementFactory(function(factoryTemplate, factoryInitializer)
+      template = factoryTemplate
+      initializer = factoryInitializer
+    end, data)
+    local frame = box.frames[index]
+    if frame == nil then
+      frame = CreateFrame(frameTypeForTemplate(template), nil, box.ScrollTarget)
+      box.frames[index] = frame
+      frame.acquireCount = 0
+    end
+    frame.acquireCount = frame.acquireCount + 1
+    frame.elementData = data
+    frame.elementIndex = index
+    frame.initializer = initializer
+    frame:Show()
+    return frame, initializer
+  end
+
+  local function layout()
+    local view = box.view
+    if not view or not box.provider then
+      return
+    end
+    local offset = view.top
+    local count = #box.provider.collection
+    for index, data in ipairs(box.provider.collection) do
+      local frame, initializer = acquire(index, data)
+      local extent = elementExtent(index, data)
+      frame:ClearAllPoints()
+      frame:SetPoint("TOPLEFT", box.ScrollTarget, "TOPLEFT", 0, -offset)
+      frame:SetPoint("TOPRIGHT", box.ScrollTarget, "TOPRIGHT", 0, -offset)
+      frame:SetHeight(extent)
+      frame.offset = offset
+      initializer(frame, data)
+      offset = offset + extent + view.spacing
+    end
+    box:TriggerEvent("OnLayout")
+    for index = count + 1, #box.frames do
+      box.frames[index]:Hide()
+      box.frames[index].elementData = nil
+    end
+  end
+
+  function box:SetDataProvider(provider, retain)
+    self.setProviderCalls = (rawget(self, "setProviderCalls") or 0) + 1
+    self.provider = provider
+    provider.listeners = { layout }
+    if not retain then
+      self.scrollPercentage = 0
+    end
+    layout()
+  end
+  function box:Rebuild()
+    self.rebuildCount = self.rebuildCount + 1
+    layout()
+  end
+  function box:ReinitializeFrames()
+    for index, data in ipairs(self.provider.collection) do
+      local frame = self.frames[index]
+      if frame and frame.initializer then
+        frame.initializer(frame, data)
+      end
+    end
+  end
+  function box:GetVisibleFrames()
+    local visible = {}
+    for index = 1, #self.provider.collection do
+      visible[#visible + 1] = self.frames[index]
+    end
+    return visible
+  end
+  function box:GetExtent()
+    return totalExtent()
+  end
+  function box:HasScrollableExtent()
+    return totalExtent() > self:GetHeight()
+  end
+  function box:GetVisibleExtentPercentage()
+    local total = totalExtent()
+    if total <= 0 then
+      return 1
+    end
+    return math.min(1, self:GetHeight() / total)
+  end
+  function box:GetScrollPercentage()
+    return self.scrollPercentage
+  end
+  function box:SetScrollPercentage(value)
+    self.scrollPercentage = value
+  end
+  function box:ScrollToEnd()
+    self.scrollEndCalls = self.scrollEndCalls + 1
+    self.scrollPercentage = 1
+  end
+  function box:ScrollInDirection(percentage, direction)
+    table.insert(self.pageLog, { percentage = percentage, direction = direction })
+  end
+  function box:OnMouseWheel(delta)
+    table.insert(self.wheelLog, delta)
+  end
+  function box:RegisterCallback(event, fn, owner)
+    self.callbacks[event] = self.callbacks[event] or {}
+    table.insert(self.callbacks[event], { fn = fn, owner = owner })
+  end
+  function box:TriggerEvent(event, ...)
+    for _, entry in ipairs(self.callbacks[event] or {}) do
+      entry.fn(entry.owner, ...)
+    end
   end
 end
+
+_G.CreateAnchor = function(point, relativeTo, relativePoint, x, y)
+  local anchor = { point = point, relativeTo = relativeTo, relativePoint = relativePoint, x = x, y = y }
+  function anchor:SetPoint(region, clearAllPoints)
+    if clearAllPoints then
+      region:ClearAllPoints()
+    end
+    region:SetPoint(self.point, self.relativeTo, self.relativePoint, self.x, self.y)
+  end
+  return anchor
+end
+
+_G.ScrollUtil = {
+  InitScrollBoxListWithScrollBar = function(box, bar, view)
+    box.view = view
+    box.scrollBar = bar
+  end,
+  AddManagedScrollBarVisibilityBehavior = function(box, bar, anchorsWithBar, anchorsWithoutBar)
+    local behavior = { appliedAnchors = nil }
+    function behavior:Evaluate(force)
+      local visible = box:HasScrollableExtent()
+      if not force and visible == bar:IsShown() then
+        return
+      end
+      bar:SetShown(visible)
+      local anchors = visible and anchorsWithBar or anchorsWithoutBar
+      if self.appliedAnchors == anchors then
+        return
+      end
+      self.appliedAnchors = anchors
+      box:ClearAllPoints()
+      for _, anchor in ipairs(anchors) do
+        anchor:SetPoint(box, false)
+      end
+    end
+    box:RegisterCallback("OnLayout", behavior.Evaluate, behavior)
+    box:RegisterCallback("OnSizeChanged", behavior.Evaluate, behavior)
+    behavior:Evaluate(true)
+    box.scrollBarBehavior = behavior
+    return behavior
+  end,
+}
+
+_G.TOOLTIP_DEFAULT_BACKGROUND_COLOR = newColor(0.1, 0.1, 0.1)
 
 local function installResizeButton(button)
   function button:Init(target, minWidth, minHeight, maxWidth, maxHeight)
@@ -525,11 +832,11 @@ _G.CreateFrame = function(frameType, name, parent, template)
     frame.portraitShown = true
     frame.border = "PortraitFrameTemplate"
   end
-  if template == "WowStyle1DropdownTemplate" then
-    installDropdown(frame)
-  end
   if template == "PanelResizeButtonTemplate" then
     installResizeButton(frame)
+  end
+  if template == "WowScrollBoxList" then
+    installScrollBox(frame)
   end
   if name then
     _G[name] = frame
@@ -560,6 +867,15 @@ _G.IsShiftKeyDown = function()
 end
 
 _G.UIParent = _G.UIParent or newRegion("Frame")
+
+_G.Minimap = newRegion("Frame")
+_G.Minimap:SetSize(198, 198)
+_G.Minimap.centerX = 1000
+_G.Minimap.centerY = 500
+
+_G.GetCursorPosition = function()
+  return _G.WOWC_TEST_CURSOR_X or 0, _G.WOWC_TEST_CURSOR_Y or 0
+end
 
 _G.SlashCmdList = _G.SlashCmdList or {}
 
@@ -614,34 +930,32 @@ _G.SetItemRef = function(link, text, button, frame)
 end
 
 _G.GameTooltip = {
-  SetOwner = function() end,
-  SetText = function() end,
-  AddLine = function() end,
-  Show = function() end,
-  Hide = function() end,
+  lines = {},
+  shown = false,
+  SetOwner = function(self, owner, anchor)
+    self.owner = owner
+    self.anchor = anchor
+    self.lines = {}
+  end,
+  SetText = function(self, text)
+    self.lines = { { text = text } }
+  end,
+  AddLine = function(self, text, r, g, b)
+    table.insert(self.lines, { text = text, r = r, g = g, b = b })
+  end,
+  Show = function(self)
+    self.shown = true
+  end,
+  Hide = function(self)
+    self.shown = false
+  end,
 }
-
-_G.StaticPopupDialogs = _G.StaticPopupDialogs or {}
-
-_G.StaticPopup_Show = function(which, textArg1, textArg2, data)
-  local dialog = newRegion("Frame")
-  installPopupDialog(dialog)
-  _G.WOWC_TEST_LAST_STATIC_POPUP = {
-    which = which,
-    textArg1 = textArg1,
-    textArg2 = textArg2,
-    data = data,
-    info = _G.StaticPopupDialogs[which],
-    dialog = dialog,
-  }
-  return dialog
-end
 
 _G.GetServerTime = function()
   return _G.WOWC_TEST_SERVER_TIME or os.time()
 end
 
-_G.NORMAL_FONT_COLOR = newColor(1, 1, 1)
+_G.NORMAL_FONT_COLOR = newColor(1, 0.82, 0)
 _G.GRAY_FONT_COLOR = newColor(0.5, 0.5, 0.5)
 _G.YELLOW_FONT_COLOR = newColor(1, 1, 0)
 
@@ -651,7 +965,34 @@ for i = 0, 7 do
   _G.ITEM_QUALITY_COLORS[i] = { r = color.r, g = color.g, b = color.b, hex = "|cff", color = color }
 end
 
-_G.GameFontHighlightSmall = _G.GameFontHighlightSmall or {}
+for _, fontName in ipairs({
+  "GameFontHighlightSmall",
+  "GameFontHighlight",
+  "GameFontHighlightMedium",
+  "GameFontHighlightLarge",
+  "GameFontNormalSmall",
+  "GameFontNormal",
+  "GameFontNormalMed3",
+  "GameFontNormalLarge",
+}) do
+  local heights = {
+    GameFontHighlightSmall = 10,
+    GameFontNormalSmall = 10,
+    GameFontHighlight = 12,
+    GameFontNormal = 12,
+    GameFontHighlightMedium = 14,
+    GameFontNormalMed3 = 14,
+    GameFontHighlightLarge = 16,
+    GameFontNormalLarge = 16,
+  }
+  _G[fontName] = _G[fontName]
+    or {
+      fontName = fontName,
+      GetFont = function()
+        return "Fonts/FRIZQT__.TTF", heights[fontName], ""
+      end,
+    }
+end
 
 _G.C_Item = _G.C_Item or {}
 _G.C_Item.GetItemQualityByID = function(itemId)

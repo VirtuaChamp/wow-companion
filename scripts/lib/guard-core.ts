@@ -130,6 +130,16 @@ const noProtectedAddonCallsRule = (files: ListedFile[]): Violation[] => {
   );
 };
 
+const noSharedDialogTaintRule = (files: ListedFile[]): Violation[] => {
+  const patterns = [/StaticPopup/, /hooksecurefunc/];
+  return scanFiles(
+    files,
+    (relPath) => relPath.startsWith("addon/") && relPath.endsWith(".lua"),
+    patterns,
+    "no shared Blizzard dialog or hook in the addon",
+  );
+};
+
 const noDeprecatedChatGlobalsRule = (files: ListedFile[]): Violation[] => {
   const patterns = [/ChatFrame_AddMessageEventFilter/, /ChatEdit_/, /ChatFrame_ReplyTell/];
   return scanFiles(
@@ -468,6 +478,7 @@ const allRules: ((files: ListedFile[]) => Violation[])[] = [
   noGameInputRule,
   noProtectedAddonCallsRule,
   noDeprecatedChatGlobalsRule,
+  noSharedDialogTaintRule,
   localApiBindRule,
   noCustomArtRule,
   gitignoreCoverageRule,

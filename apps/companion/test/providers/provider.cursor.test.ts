@@ -585,4 +585,28 @@ describe("provider.cursor", () => {
     expect(result).toEqual({ ok: false, error: "session_unknown" });
     expect(spawned).toBe(false);
   });
+
+  test("provider.cursor.tools_none writes no .cursor/mcp.json, default unchanged", async () => {
+    const mcpConfigSeen: boolean[] = [];
+    const capture: Parameters<typeof createCursorWith>[0] = async (_command, _args, options) => {
+      mcpConfigSeen.push(existsSync(join(options.cwd, ".cursor", "mcp.json")));
+      return { outcome: "exit", code: 0 };
+    };
+    const provider = createCursorWith(
+      capture,
+      fakeCheckInstalled(true),
+      noListModels,
+      true,
+    )(baseConfig());
+    const input = {
+      runId: "run-t",
+      prompt: "title please",
+      system: "test",
+      model: "auto",
+      signal: new AbortController().signal,
+    };
+    await provider.run({ ...input, tools: "none" }, () => {});
+    await provider.run(input, () => {});
+    expect(mcpConfigSeen).toEqual([false, true]);
+  });
 });

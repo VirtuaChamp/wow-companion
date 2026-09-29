@@ -80,7 +80,7 @@ describe("daemon.hello", () => {
   });
 
   it("seeds a default chat when none exists so the first ask has somewhere to go", async () => {
-    const harness = startDaemon();
+    const harness = startDaemon({ initialChats: emptyChatsState });
     cleanups.push(harness.stop);
 
     harness.link.push(hello());

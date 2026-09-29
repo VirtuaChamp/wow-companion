@@ -10,5 +10,6 @@ Items.lua
 Mention.lua
 Waypoint.lua
 AiWindow.lua
+MinimapButton.lua
 Settings.lua
 Report.lua

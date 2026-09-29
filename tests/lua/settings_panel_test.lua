@@ -10,9 +10,37 @@ function ns.Transport.onMessage(handler)
 end
 
 local notices = {}
-ns.AiWindow = { notice = function(text)
-  table.insert(notices, text)
-end }
+local textSizeCalls = {}
+local minimapCalls = {}
+local minimapShown = true
+ns.AiWindow = {
+  notice = function(text)
+    table.insert(notices, text)
+  end,
+  textSize = function()
+    return "normal"
+  end,
+  textSizeChoices = function()
+    return {
+      { key = "small", label = "Small" },
+      { key = "normal", label = "Normal" },
+      { key = "large", label = "Large" },
+      { key = "larger", label = "Larger" },
+    }
+  end,
+  setTextSize = function(key)
+    table.insert(textSizeCalls, key)
+  end,
+}
+ns.MinimapButton = {
+  isShown = function()
+    return minimapShown
+  end,
+  setShown = function(shown)
+    minimapShown = shown
+    table.insert(minimapCalls, shown)
+  end,
+}
 
 local receivedCompanionVersion
 ns.Report = { setCompanionVersion = function(version)
@@ -456,5 +484,29 @@ ns.Settings.onOptions({
 local sentBeforeDisabled = #ns.Transport.sent
 ns.Settings.setModel("sonnet")
 assert(#ns.Transport.sent == sentBeforeDisabled, "a model change on a provider that is no longer usable sends nothing (wowc10-2)")
+
+local textSizeInitializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS["WOWC_TEXT_SIZE"]
+assert(textSizeInitializer ~= nil and textSizeInitializer.kind == "dropdown", "Text size is a dropdown in the settings category")
+assert(textSizeInitializer.setting.name == "Text size", "the dropdown is labelled Text size")
+assert(textSizeInitializer.tooltip ~= nil and textSizeInitializer.tooltip ~= "", "Text size carries a tooltip")
+local sizeLabels = {}
+for _, option in ipairs(textSizeInitializer:GetOptions()) do
+  table.insert(sizeLabels, option.label)
+  assert(option.controlType == Settings.ControlType.Radio, "text size options are radio entries")
+end
+assert(table.concat(sizeLabels, ",") == "Small,Normal,Large,Larger", "the choices are Small, Normal, Large, Larger in that order")
+assert(textSizeInitializer.setting:GetValue() == "normal", "the dropdown shows the size in use, Normal by default")
+assert(textSizeInitializer.setting.defaultValue == "normal", "Normal is the registered default")
+assert(textSizeInitializer:PickMenuEntry("large") == true, "a size can be picked")
+assert(textSizeCalls[#textSizeCalls] == "large", "picking a size applies it through ns.AiWindow.setTextSize")
+
+local minimapInitializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS["WOWC_MINIMAP"]
+assert(minimapInitializer ~= nil and minimapInitializer.kind == "checkbox", "Show minimap button is a checkbox in the settings category")
+assert(minimapInitializer.setting.name == "Show minimap button", "the checkbox is labelled Show minimap button")
+assert(minimapInitializer.setting.defaultValue == true, "the button is shown by default")
+assert(minimapInitializer.setting:GetValue() == true, "the checkbox reads the current shown state")
+minimapInitializer.setting:SetValue(false)
+assert(minimapCalls[#minimapCalls] == false, "unchecking hides the button through ns.MinimapButton.setShown")
+assert(minimapInitializer.setting:GetValue() == false, "the checkbox follows the hidden state")
 
 print("settings.panel: all assertions passed")

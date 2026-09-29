@@ -17,6 +17,7 @@ export type RunRequest = {
   prompt: string;
   system: string;
   sessionId?: string;
+  tools?: "none";
 };
 
 export type RunOutcome = {
@@ -87,6 +88,7 @@ export function createRunner(deps: RunnerDeps): Runner {
           signal: active.controller.signal,
           ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
           ...(request.effort === undefined ? {} : { effort: request.effort }),
+          ...(request.tools === undefined ? {} : { tools: request.tools }),
         },
         onEvent,
       );

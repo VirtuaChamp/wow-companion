@@ -134,8 +134,8 @@ const companionToGameSamples: CompanionToGame[] = [
     chat: { id: "chat-1", provider: "claude", model: "opus" },
     companionVersion: "0.4.2",
   },
-  { t: "progress", id: "ask-1", status: "thinking" },
-  { t: "progress", id: "ask-1", status: "tool", detail: "find_npc" },
+  { t: "progress", id: "ask-1", chat: "c1", status: "thinking" },
+  { t: "progress", id: "ask-1", chat: "c1", status: "tool", detail: "find_npc" },
   {
     t: "reply",
     id: "ask-1",
@@ -630,8 +630,34 @@ describe("contracts.parse", () => {
     ).toEqual({ ok: false, error: "bad_frame" });
   });
 
+  it("accepts an error naming the chat of its ask and rejects a non-string chat", () => {
+    expect(
+      parseCompanionToGame({ t: "error", id: "a1", chat: "c1", code: "busy", message: "m" }),
+    ).toEqual({
+      ok: true,
+      value: { t: "error", id: "a1", chat: "c1", code: "busy", message: "m" },
+    });
+    expect(parseCompanionToGame({ t: "error", code: "busy", message: "m" }).ok).toBe(true);
+    expect(parseCompanionToGame({ t: "error", chat: 4, code: "busy", message: "m" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+  });
+
+  it("rejects a progress message without the chat it belongs to", () => {
+    expect(parseCompanionToGame({ t: "progress", id: "ask-1", status: "thinking" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(
+      parseCompanionToGame({ t: "progress", id: "ask-1", chat: 7, status: "thinking" }),
+    ).toEqual({ ok: false, error: "bad_frame" });
+  });
+
   it("rejects a progress message with status outside the known set", () => {
-    expect(parseCompanionToGame({ t: "progress", id: "ask-1", status: "done" })).toEqual({
+    expect(
+      parseCompanionToGame({ t: "progress", id: "ask-1", chat: "c1", status: "done" }),
+    ).toEqual({
       ok: false,
       error: "bad_frame",
     });

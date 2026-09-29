@@ -834,8 +834,20 @@ describe("link.batch", () => {
     const { link, writes } = await startConnected({ session: "sess-a", delay: instantDelay });
     const writesBeforeSends = writes.length;
 
-    const first = link.send({ t: "progress", id: "p1", status: "thinking", detail: "stale" });
-    const second = link.send({ t: "progress", id: "p1", status: "tool", detail: "fresh" });
+    const first = link.send({
+      t: "progress",
+      id: "p1",
+      chat: "c1",
+      status: "thinking",
+      detail: "stale",
+    });
+    const second = link.send({
+      t: "progress",
+      id: "p1",
+      chat: "c1",
+      status: "tool",
+      detail: "fresh",
+    });
     const reply = link.send({
       t: "reply",
       id: "p1",
@@ -853,7 +865,7 @@ describe("link.batch", () => {
     const deliverWrites = writes.slice(writesBeforeSends).filter((w) => w.path.includes("r.lua"));
     expect(deliverWrites).toHaveLength(1);
     expect(parseSlotContent(deliverWrites[0]?.data as string).msgs).toEqual([
-      { t: "progress", id: "p1", status: "tool", detail: "fresh" },
+      { t: "progress", id: "p1", chat: "c1", status: "tool", detail: "fresh" },
       {
         t: "reply",
         id: "p1",
@@ -868,13 +880,19 @@ describe("link.batch", () => {
   it("holds messages sent after an await across the slot-read window in the same batch", async () => {
     const { link, writes } = await startConnected({ session: "sess-a", slotReadMs: 150 });
 
-    link.send({ t: "progress", id: "warm", status: "thinking", detail: "opens the window" });
+    link.send({
+      t: "progress",
+      id: "warm",
+      chat: "c1",
+      status: "thinking",
+      detail: "opens the window",
+    });
     await new Promise((resolve) => setTimeout(resolve, 30));
     const writesBeforeSends = writes.length;
 
-    link.send({ t: "progress", id: "p1", status: "thinking", detail: "first" });
+    link.send({ t: "progress", id: "p1", chat: "c1", status: "thinking", detail: "first" });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    link.send({ t: "progress", id: "p1", status: "tool", detail: "second" });
+    link.send({ t: "progress", id: "p1", chat: "c1", status: "tool", detail: "second" });
 
     await new Promise((resolve) => setTimeout(resolve, 250));
     await link.idle();
@@ -882,7 +900,7 @@ describe("link.batch", () => {
     const deliverWrites = writes.slice(writesBeforeSends).filter((w) => w.path.includes("r.lua"));
     expect(deliverWrites).toHaveLength(1);
     expect(parseSlotContent(deliverWrites[0]?.data as string).msgs).toEqual([
-      { t: "progress", id: "p1", status: "tool", detail: "second" },
+      { t: "progress", id: "p1", chat: "c1", status: "tool", detail: "second" },
     ]);
   });
 });

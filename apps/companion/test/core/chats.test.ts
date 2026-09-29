@@ -16,8 +16,14 @@ import type { ProviderError } from "@wow-companion/contracts";
 import { apply } from "../../src/core/settings.ts";
 import type { ProviderOption, Settings } from "../../src/core/settings.ts";
 
-function created(id: string, name: string, provider: "claude" | "codex" | "cursor", now: number) {
-  const result = createChat(emptyChatsState, id, name, provider, now);
+function created(
+  id: string,
+  name: string,
+  provider: "claude" | "codex" | "cursor",
+  now: number,
+  titleSource: "auto" | "user" = "auto",
+) {
+  const result = createChat(emptyChatsState, id, name, provider, now, titleSource);
   if (!result.ok) throw new Error("expected ok");
   return result.value;
 }
@@ -154,7 +160,15 @@ describe("chats.lifecycle", () => {
         state: {
           activeId: "c2",
           chats: [
-            { id: "c2", name: "Second", provider: "claude", unread: 0, lastAt: 2000, history: [] },
+            {
+              id: "c2",
+              name: "Second",
+              titleSource: "auto",
+              provider: "claude",
+              unread: 0,
+              lastAt: 2000,
+              history: [],
+            },
           ],
         },
         effects: [
@@ -186,7 +200,7 @@ describe("chats.lifecycle", () => {
   });
 
   it("reset clears history and session id but keeps name and provider", () => {
-    const result = created("c1", "Quests", "claude", 1000);
+    const result = created("c1", "Quests", "claude", 1000, "user");
     const begun = beginAsk(result.state, "c1", "ask-1", "hello", 1001);
     expect(begun.ok).toBe(true);
     if (!begun.ok) return;
@@ -246,6 +260,7 @@ describe("chats.lifecycle", () => {
     expect(failed.value.effects).toContainEqual({
       t: "error",
       id: "ask-1",
+      chat: "c1",
       code: "cancelled",
       message: "cancelled",
     });
@@ -565,6 +580,7 @@ describe("chats.providerErrors", () => {
     expect(failed.ok && failed.value.effects).toContainEqual({
       t: "error",
       id: "ask-1",
+      chat: "c1",
       code: "provider_failed",
       message: "provider failed",
     });
@@ -637,7 +653,7 @@ describe("chats.crossCheck", () => {
     expect(failed.value.state.chats[0]?.runningAsk).toBeUndefined();
     expect(failed.value.state.chats[0]?.unread).toBe(0);
     expect(failed.value.effects.filter((e) => e.t === "error")).toEqual([
-      { t: "error", id: "ask-2", code: "cancelled", message: "cancelled" },
+      { t: "error", id: "ask-2", chat: "c1", code: "cancelled", message: "cancelled" },
     ]);
   });
 

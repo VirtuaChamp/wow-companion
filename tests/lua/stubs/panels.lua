@@ -417,6 +417,13 @@ _G.MenuUtil = {
   ShowTooltipEx = function(owner, tooltip, func)
     func(tooltip)
   end,
+  CreateContextMenu = function(owner, generator)
+    local menuOwner = { CloseMenu = function() end }
+    local root = _G.WOWC_TEST_NEW_MENU_DESCRIPTION(menuOwner, nil, nil)
+    generator(owner, root)
+    _G.WOWC_TEST_LAST_CONTEXT_MENU = { owner = owner, buttons = root.children }
+    return _G.WOWC_TEST_LAST_CONTEXT_MENU
+  end,
 }
 _G.GameTooltip_SetTitle = function(tooltip, text)
   table.insert(tooltip.lines, "title:" .. text)

@@ -67,6 +67,9 @@ describe("daemon.ask", () => {
     expect(seen[0]?.prompt).toBe("where is the inn");
     expect(seen[0]?.system).toContain("quest 7");
     expect(seen[0]?.system).toContain("level 10");
+    expect(seen[0]?.system).toContain("plain text without markdown");
+    expect(seen[0]?.system).toContain("never say you placed or set one, say you are offering it");
+    expect(seen[0]?.system).toContain("only wowhead.com, warcraft.wiki.gg and icy-veins.com");
   });
 
   it("maps provider events to progress messages under the ask id", async () => {
@@ -90,9 +93,9 @@ describe("daemon.ask", () => {
 
     const progress = harness.link.sent().filter((msg) => msg.t === "progress");
     expect(progress).toEqual([
-      { t: "progress", id: "a1", status: "thinking" },
-      { t: "progress", id: "a1", status: "tool", detail: "find_npc" },
-      { t: "progress", id: "a1", status: "tool", detail: "find_quest" },
+      { t: "progress", id: "a1", chat: "default", status: "thinking" },
+      { t: "progress", id: "a1", chat: "default", status: "tool", detail: "find_npc" },
+      { t: "progress", id: "a1", chat: "default", status: "tool", detail: "find_quest" },
     ]);
   });
 
@@ -129,7 +132,7 @@ describe("daemon.ask", () => {
     expect(harness.daemon.api.getState()).toEqual({ ok: false, error: "not_connected" });
   });
 
-  it("creates a chat named Chat <n+1> for an ask that names an unknown chat", async () => {
+  it("creates a chat for an ask that names an unknown chat, titled from the ask and then by its provider", async () => {
     const harness = await connected();
 
     harness.link.push({ t: "ask", id: "a1", chat: "stray", text: "hi", mentions: [] });
@@ -138,7 +141,7 @@ describe("daemon.ask", () => {
     const chats = harness.link.sent().filter((msg) => msg.t === "chats");
     const last = chats.at(-1);
     if (last?.t !== "chats") throw new Error("expected chats");
-    expect(last.list.find((chat) => chat.id === "stray")?.name).toBe("Chat 2");
+    expect(last.list.find((chat) => chat.id === "stray")?.name).toBe("pong");
     expect(harness.link.sent().find((msg) => msg.t === "reply")).toMatchObject({ chat: "stray" });
   });
 
@@ -336,8 +339,9 @@ describe("daemon.ask", () => {
       );
     }
 
-    expect(seen).toHaveLength(4);
-    for (const input of seen) {
+    const asks = seen.filter((input) => input.tools === undefined);
+    expect(asks).toHaveLength(4);
+    for (const input of asks) {
       expect(input.model).toBe("m1");
       expect(input.effort).toBe("low");
     }

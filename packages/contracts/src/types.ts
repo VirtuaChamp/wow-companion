@@ -119,7 +119,13 @@ export type CompanionToGame =
       chat?: { id: string } & Choice;
       companionVersion?: string;
     }
-  | { t: "progress"; id: string; status: "queued" | "thinking" | "tool"; detail?: string }
+  | {
+      t: "progress";
+      id: string;
+      chat: string;
+      status: "queued" | "thinking" | "tool";
+      detail?: string;
+    }
   | {
       t: "reply";
       id: string;
@@ -131,7 +137,7 @@ export type CompanionToGame =
     }
   | { t: "itemreq"; req: string; ids: number[] }
   | { t: "ack"; seq: number }
-  | { t: "error"; id?: string; code: ErrorCode; message: string };
+  | { t: "error"; id?: string; chat?: string; code: ErrorCode; message: string };
 
 export interface GameLink {
   messages(): AsyncIterable<GameToCompanion>;
@@ -162,6 +168,7 @@ export interface Provider {
       sessionId?: string;
       model: string;
       effort?: Effort;
+      tools?: "none";
       signal: AbortSignal;
     },
     onEvent: (e: ProviderEvent) => void,

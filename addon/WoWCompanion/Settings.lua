@@ -17,6 +17,11 @@ local STRINGS = {
   notInstalledReason = "Not installed",
   disabledReason = "Disabled",
   noModelsReason = "No models listed",
+  textSizeLabel = "Text size",
+  textSizeTooltip = "How large the text is in the Claude window: chat bubbles, the chat list and the input line.",
+  minimapLabel = "Show minimap button",
+  minimapTooltip = "Show the WoW Companion button on the minimap. "
+    .. "Left-click opens or closes the Claude window, right-click opens these settings.",
 }
 
 local PROVIDER_NAMES = {
@@ -31,6 +36,8 @@ local VARIABLES = {
   effort = "WOWC_EFFORT",
   scope = "WOWC_SCOPE",
   hub = "WOWC_HUB",
+  textSize = "WOWC_TEXT_SIZE",
+  minimap = "WOWC_MINIMAP",
 }
 
 local state = {
@@ -131,6 +138,14 @@ local function textOptions(entries)
     end
   end
   return container:GetData()
+end
+
+function ns.Settings.textSizeOptions()
+  local entries = {}
+  for _, choice in ipairs(ns.AiWindow.textSizeChoices()) do
+    table.insert(entries, { value = choice.key, label = choice.label })
+  end
+  return textOptions(entries)
 end
 
 function ns.Settings.providerOptions()
@@ -464,6 +479,36 @@ local function ensureCategory()
   local scopeInitializer = Settings.CreateCheckbox(category, scopeSetting, STRINGS.scopeThisChatTooltip)
   scopeInitializer:AddModifyPredicate(ns.Settings.isScopeEnabled)
   scopeInitializer:AddEvaluateStateCVar(VARIABLES.hub)
+
+  local textSizeSetting = Settings.RegisterProxySetting(
+    category,
+    VARIABLES.textSize,
+    Settings.VarType.String,
+    STRINGS.textSizeLabel,
+    "normal",
+    function()
+      return ns.AiWindow.textSize()
+    end,
+    function(value)
+      ns.AiWindow.setTextSize(value)
+    end
+  )
+  Settings.CreateDropdown(category, textSizeSetting, ns.Settings.textSizeOptions, STRINGS.textSizeTooltip)
+
+  local minimapSetting = Settings.RegisterProxySetting(
+    category,
+    VARIABLES.minimap,
+    Settings.VarType.Boolean,
+    STRINGS.minimapLabel,
+    true,
+    function()
+      return ns.MinimapButton.isShown()
+    end,
+    function(value)
+      ns.MinimapButton.setShown(value)
+    end
+  )
+  Settings.CreateCheckbox(category, minimapSetting, STRINGS.minimapTooltip)
 
   Settings.RegisterAddOnCategory(category)
 

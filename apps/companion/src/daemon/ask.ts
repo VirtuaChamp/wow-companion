@@ -6,9 +6,23 @@ import type {
   ProviderEvent,
   Snapshot,
 } from "@wow-companion/contracts";
-import { beginAsk, completeAsk, createChat, failAsk } from "../core/chats.ts";
-import type { ChatState } from "../core/chats.ts";
-import { build as buildPrompt } from "../core/prompt.ts";
+import {
+  applyAutoTitle,
+  beginAsk,
+  completeAsk,
+  createChat,
+  failAsk,
+  sanitizeTitle,
+} from "../core/chats.ts";
+import type { ChatState, TitleRequest } from "../core/chats.ts";
+import {
+  PLAIN_TEXT_RULE,
+  TITLE_SYSTEM,
+  WAYPOINT_RULE,
+  WEB_SOURCES_RULE,
+  build as buildPrompt,
+  buildTitlePrompt,
+} from "../core/prompt.ts";
 import { chatChoice } from "../core/settings.ts";
 import type { RunOutcome } from "../runner.ts";
 import { chatsErrorMessage, commit, reportChatsError } from "./commit.ts";
@@ -16,8 +30,7 @@ import type { DaemonContext } from "./context.ts";
 import { liveSnapshot } from "./state.ts";
 
 const NEWLINE = String.fromCharCode(10);
-const SYSTEM_PREFACE =
-  "You are an assistant inside World of Warcraft Forever, answering in a small in-game chat window. Keep answers short. Use the wowc tools for game state, world data and waypoints. You are read-only: you cannot run commands or change files.";
+const SYSTEM_PREFACE = `You are an assistant inside World of Warcraft Forever, answering in a small in-game chat window. Keep answers short. Use the wowc tools for game state, world data and waypoints. You are read-only: you cannot run commands or change files. ${WAYPOINT_RULE} ${WEB_SOURCES_RULE} ${PLAIN_TEXT_RULE}`;
 
 type AskInput = {
   chatId: string;
@@ -64,7 +77,11 @@ function resolveChoice(ctx: DaemonContext, chat: ChatState): { model: string; ef
   };
 }
 
-function progressSender(ctx: DaemonContext, askId: string): (event: ProviderEvent) => void {
+function progressSender(
+  ctx: DaemonContext,
+  askId: string,
+  chatId: string,
+): (event: ProviderEvent) => void {
   let last: string | undefined;
   function push(key: string, msg: CompanionToGame): void {
     if (key === last) return;
@@ -74,13 +91,14 @@ function progressSender(ctx: DaemonContext, askId: string): (event: ProviderEven
   return (event) => {
     switch (event.kind) {
       case "text":
-        push("thinking", { t: "progress", id: askId, status: "thinking" });
+        push("thinking", { t: "progress", id: askId, chat: chatId, status: "thinking" });
         return;
       case "tool":
         if (event.failure !== undefined) ctx.log(`tool ${event.name} failed`);
         push(`tool:${event.name}`, {
           t: "progress",
           id: askId,
+          chat: chatId,
           status: "tool",
           detail: event.name,
         });
@@ -89,6 +107,50 @@ function progressSender(ctx: DaemonContext, askId: string): (event: ProviderEven
         return;
     }
   };
+}
+
+async function runTitle(
+  ctx: DaemonContext,
+  chatId: string,
+  askId: string,
+  request: TitleRequest,
+): Promise<void> {
+  const chat = ctx.state.chats.chats.find((candidate) => candidate.id === chatId);
+  if (chat === undefined) return;
+  if (!ctx.config.providers[chat.provider].enabled) return;
+  const outcome = await ctx.runner.run(
+    {
+      askId: `title-${askId}`,
+      provider: chat.provider,
+      ...resolveChoice(ctx, chat),
+      prompt: buildTitlePrompt(request.question, request.reply),
+      system: TITLE_SYSTEM,
+      tools: "none",
+    },
+    () => {},
+  );
+  if (!outcome.result.ok) {
+    ctx.log(`chat title not generated: ${outcome.result.error}`);
+    return;
+  }
+  const title = sanitizeTitle(outcome.result.value.text);
+  if (title === undefined) {
+    ctx.log("chat title not generated: empty answer");
+    return;
+  }
+  const applied = applyAutoTitle(ctx.state.chats, chatId, title, request.conversation);
+  if (applied.ok && applied.value.effects.length > 0) commit(ctx, applied.value);
+}
+
+function startTitleRun(
+  ctx: DaemonContext,
+  chatId: string,
+  askId: string,
+  request: TitleRequest,
+): void {
+  runTitle(ctx, chatId, askId, request).catch((error: unknown) => {
+    ctx.log(`chat title not generated: ${String(error)}`);
+  });
 }
 
 async function executeAsk(ctx: DaemonContext, input: AskInput): Promise<void> {
@@ -105,7 +167,7 @@ async function executeAsk(ctx: DaemonContext, input: AskInput): Promise<void> {
           system: systemPrompt(liveSnapshot(ctx), input.mentions, input.transcriptSummary),
           ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
         },
-        progressSender(ctx, input.askId),
+        progressSender(ctx, input.askId, input.chatId),
       );
   if (outcome.result.ok) {
     const completed = completeAsk(
@@ -126,6 +188,9 @@ async function executeAsk(ctx: DaemonContext, input: AskInput): Promise<void> {
         effect.t === "reply" && waypoint !== undefined ? { ...effect, waypoint } : effect,
       ),
     });
+    if (completed.value.titleRequest !== undefined) {
+      startTitleRun(ctx, input.chatId, input.askId, completed.value.titleRequest);
+    }
     return;
   }
   const failed = failAsk(
@@ -170,11 +235,11 @@ export function onAsk(ctx: DaemonContext, msg: Extract<GameToCompanion, { t: "as
       ctx.state.settings.global.provider,
       ctx.now(),
     );
-    if (!created.ok) return reportChatsError(ctx, created.error, msg.id);
+    if (!created.ok) return reportChatsError(ctx, created.error, msg.id, msg.chat);
     commit(ctx, created.value);
   }
   const begun = beginAsk(ctx.state.chats, msg.chat, msg.id, msg.text, ctx.now());
-  if (!begun.ok) return reportChatsError(ctx, begun.error, msg.id);
+  if (!begun.ok) return reportChatsError(ctx, begun.error, msg.id, msg.chat);
   commit(ctx, begun.value);
   executeAsk(ctx, {
     chatId: msg.chat,

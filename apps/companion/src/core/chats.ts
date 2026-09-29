@@ -11,9 +11,12 @@ export type HistoryLine = {
 
 type RunningAsk = { id: string; text: string; cancelling?: boolean };
 
+export type TitleSource = "auto" | "user";
+
 export type ChatState = {
   id: string;
   name: string;
+  titleSource: TitleSource;
   provider: ProviderId;
   sessionId?: string;
   runningAsk?: RunningAsk;
@@ -35,12 +38,26 @@ export type BeginAskOutcome = ChatsOutcome & { sessionId?: string };
 
 type RetryAsk = { askId: string; text: string; transcriptSummary: string };
 
+export type ConversationIdentity = { at: EpochSeconds; text: string };
+
+export type TitleRequest = {
+  question: string;
+  reply: string;
+  conversation: ConversationIdentity;
+};
+
+export type CompleteAskOutcome = ChatsOutcome & { titleRequest?: TitleRequest };
+
 export type FailAskOutcome = ChatsOutcome & { retry?: RetryAsk };
 
 const HISTORY_LIMIT = 200;
 const SUMMARY_LINE_LIMIT = 50;
 const SUMMARY_CHAR_LIMIT = 4000;
 const REPLY_SUMMARY_LIMIT = 200;
+const TITLE_CHAR_LIMIT = 32;
+const TITLE_EDGE_PATTERN = /^["'`*_#“”‘’\s]+|["'`*_#“”‘’\s]+$/g;
+const TITLE_LABEL_PATTERN = /^title\s*:\s*/i;
+const TITLE_TRAILING_PATTERN = /[\s.,;:!?-]+$/;
 
 export const emptyChatsState: ChatsState = { activeId: "", chats: [] };
 
@@ -124,6 +141,30 @@ function summarizeReply(text: string): string {
     : firstLine;
 }
 
+function fitOnWordBoundary(text: string): string {
+  if (text.length <= TITLE_CHAR_LIMIT) return text;
+  const cut = text.slice(0, TITLE_CHAR_LIMIT + 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  const fitted = lastSpace > 0 ? cut.slice(0, lastSpace) : text.slice(0, TITLE_CHAR_LIMIT);
+  return fitted.replace(TITLE_TRAILING_PATTERN, "");
+}
+
+export function firstWordsTitle(text: string): string | undefined {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed === "" ? undefined : fitOnWordBoundary(collapsed);
+}
+
+export function sanitizeTitle(raw: string): string | undefined {
+  const firstLine = raw.split(/\r?\n/).find((line) => line.trim() !== "") ?? "";
+  const cleaned = firstLine
+    .replace(/\s+/g, " ")
+    .replace(TITLE_EDGE_PATTERN, "")
+    .replace(TITLE_LABEL_PATTERN, "")
+    .replace(TITLE_EDGE_PATTERN, "")
+    .replace(TITLE_TRAILING_PATTERN, "");
+  return cleaned === "" ? undefined : fitOnWordBoundary(cleaned);
+}
+
 function providerErrorMessage(error: ProviderError): string {
   switch (error) {
     case "session_unknown":
@@ -149,9 +190,10 @@ export function createChat(
   name: string,
   provider: ProviderId,
   now: EpochSeconds,
+  titleSource: TitleSource = "auto",
 ): Result<ChatsOutcome, ChatsError> {
   if (findChat(state, id) !== undefined) return { ok: false, error: "exists" };
-  const chat: ChatState = { id, name, provider, unread: 0, lastAt: now, history: [] };
+  const chat: ChatState = { id, name, titleSource, provider, unread: 0, lastAt: now, history: [] };
   const nextState: ChatsState = { activeId: id, chats: [...state.chats, chat] };
   return {
     ok: true,
@@ -193,7 +235,25 @@ export function renameChat(
   name: string,
 ): Result<ChatsOutcome, ChatsError> {
   if (findChat(state, id) === undefined) return { ok: false, error: "not_found" };
-  const nextState = replaceChat(state, id, (chat) => ({ ...chat, name }));
+  const nextState = replaceChat(state, id, (chat) => ({ ...chat, name, titleSource: "user" }));
+  return { ok: true, value: { state: nextState, effects: [toChatsMessage(nextState)] } };
+}
+
+export function applyAutoTitle(
+  state: ChatsState,
+  id: string,
+  title: string,
+  conversation: ConversationIdentity,
+): Result<ChatsOutcome, ChatsError> {
+  const chat = findChat(state, id);
+  if (chat === undefined) return { ok: false, error: "not_found" };
+  const head = chat.history[0];
+  const sameConversation =
+    head !== undefined && head.at === conversation.at && head.text === conversation.text;
+  if (chat.titleSource !== "auto" || chat.name === title || !sameConversation) {
+    return { ok: true, value: { state, effects: [] } };
+  }
+  const nextState = replaceChat(state, id, (c) => ({ ...c, name: title }));
   return { ok: true, value: { state: nextState, effects: [toChatsMessage(nextState)] } };
 }
 
@@ -253,8 +313,11 @@ export function beginAsk(
   const chat = findChat(state, chatId);
   if (chat === undefined) return { ok: false, error: "not_found" };
   if (chat.runningAsk !== undefined) return { ok: false, error: "busy" };
+  const isFirstAsk = !chat.history.some((line) => line.who === "you");
+  const firstWords = chat.titleSource === "auto" && isFirstAsk ? firstWordsTitle(text) : undefined;
   const nextState = replaceChat(state, chatId, (c) => ({
     ...c,
+    ...(firstWords === undefined ? {} : { name: firstWords }),
     runningAsk: { id: askId, text },
     lastAt: now,
     history: pushHistory(c.history, { who: "you", text, at: now }),
@@ -275,9 +338,16 @@ export function completeAsk(
   askId: string,
   outcome: { sessionId: string; text: string },
   now: EpochSeconds,
-): Result<ChatsOutcome, ChatsError> {
+): Result<CompleteAskOutcome, ChatsError> {
   const chat = findChat(state, chatId);
   if (chat === undefined || chat.runningAsk?.id !== askId) return { ok: false, error: "not_found" };
+  const isFirstReply = !chat.history.some((line) => line.who !== "you" && line.kind !== "notice");
+  const question = chat.runningAsk.text;
+  const head = chat.history[0];
+  const titleRequest: TitleRequest | undefined =
+    chat.titleSource === "auto" && isFirstReply && head !== undefined
+      ? { question, reply: outcome.text, conversation: { at: head.at, text: head.text } }
+      : undefined;
   const unreadDelta = chatId !== state.activeId ? 1 : 0;
   const nextState = replaceChat(state, chatId, (c) =>
     clearRunningAsk({
@@ -299,7 +369,13 @@ export function completeAsk(
       full: outcome.text,
     },
   ];
-  return { ok: true, value: { state: nextState, effects } };
+  return {
+    ok: true,
+    value:
+      titleRequest === undefined
+        ? { state: nextState, effects }
+        : { state: nextState, effects, titleRequest },
+  };
 }
 
 export function failAsk(
@@ -346,7 +422,13 @@ export function failAsk(
       state: nextState,
       effects: [
         toChatsMessage(nextState),
-        { t: "error", id: askId, code: terminal, message: providerErrorMessage(terminal) },
+        {
+          t: "error",
+          id: askId,
+          chat: chatId,
+          code: terminal,
+          message: providerErrorMessage(terminal),
+        },
       ],
     },
   };

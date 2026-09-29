@@ -11,6 +11,7 @@ const sample: ChatsState = {
     {
       id: "c1",
       name: "Quests",
+      titleSource: "user",
       provider: "claude",
       sessionId: "s1",
       unread: 0,
@@ -79,7 +80,15 @@ describe("state-store", () => {
       activeId: "c2",
       chats: [
         ...sample.chats,
-        { id: "c2", name: "Second", provider: "codex", unread: 0, lastAt: 1001, history: [] },
+        {
+          id: "c2",
+          name: "Second",
+          titleSource: "auto",
+          provider: "codex",
+          unread: 0,
+          lastAt: 1001,
+          history: [],
+        },
       ],
     };
     await writeChatsState(filePath, updated);
@@ -171,5 +180,64 @@ describe("state-store", () => {
       ok: true,
       value: { activeId: "", chats: [] },
     });
+  });
+
+  it("a file written before automatic titles migrates: Default and Chat N are auto, every other name is the user's", async () => {
+    const filePath = path.join(dir, "chats.json");
+    const legacy = (id: string, name: string) => ({
+      id,
+      name,
+      provider: "claude",
+      unread: 0,
+      lastAt: 1,
+      history: [],
+    });
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        activeId: "c1",
+        chats: [
+          legacy("c1", "Default"),
+          legacy("c2", "Chat 12"),
+          legacy("c3", "Gearing up"),
+          legacy("c4", "Chat two"),
+          legacy("c5", "My Chat 3"),
+        ],
+      }),
+      "utf8",
+    );
+
+    const result = await readChatsState(filePath);
+    expect(result.ok && result.value.chats.map((chat) => chat.titleSource)).toEqual([
+      "auto",
+      "auto",
+      "user",
+      "user",
+      "user",
+    ]);
+  });
+
+  it("an unknown title source is a parse failure", async () => {
+    const filePath = path.join(dir, "chats.json");
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        activeId: "c1",
+        chats: [
+          {
+            id: "c1",
+            name: "Bad",
+            titleSource: "robot",
+            provider: "claude",
+            unread: 0,
+            lastAt: 1,
+            history: [],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    expect(await readChatsState(filePath)).toEqual({ ok: false, error: "parse_failed" });
   });
 });

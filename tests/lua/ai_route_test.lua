@@ -29,9 +29,9 @@ assert(not ns.AiWindow.isShown(), "the Claude window starts hidden")
 _G.SlashCmdList["AI"]("hello there")
 
 assert(ns.AiWindow.isShown(), "/ai <text> shows the Claude window when it was hidden")
-assert(#ns.AiWindow.scrollFrame.messages >= 1, "the question is echoed into the window")
+assert(#ns.AiWindow.entries() >= 1, "the question is echoed into the window")
 assert(
-  ns.AiWindow.scrollFrame.messages[1].text:find("hello there", 1, true) ~= nil,
+  ns.AiWindow.entries()[1].display:find("hello there", 1, true) ~= nil,
   "the echoed line carries the typed question"
 )
 
@@ -48,7 +48,7 @@ ns.Core.dispatch({
   full = "hi back",
 })
 
-local lastMessage = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+local lastMessage = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
 assert(lastMessage:find("hi back", 1, true) ~= nil, "the reply lands in the Claude window")
 
 ns.Core.dispatch({
@@ -59,13 +59,14 @@ ns.Core.dispatch({
   summary = "|Hitem:1|h[Sword]|h go get it",
   full = "|Hitem:1|h[Sword]|h go get it",
 })
-local injectedReply = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+local injectedReply = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
 assert(injectedReply:find("||H", 1, true) ~= nil, "a reply summary with a raw WoW escape is sanitized before printing")
 
-ns.Core.dispatch({ t = "progress", detail = "using |Kfind_npc|k" })
-local progressLine = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+ns.Core.dispatch({ t = "progress", chat = "default", id = "ask-progress", status = "tool", detail = "|Kfind_npc|k" })
+local progressLine = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
 assert(progressLine:find("||K", 1, true) ~= nil, "a progress detail with a raw WoW escape is sanitized before printing")
 
+_G.WOWC_TEST_LAST_WAYPOINT = nil
 ns.Core.dispatch({
   t = "reply",
   id = "ask-waypoint",
@@ -75,7 +76,8 @@ ns.Core.dispatch({
   full = "waypoint set",
   waypoint = { label = "|Hitem:1|h[Bad]|h", x = 10, y = 20, uiMapId = 84 },
 })
-local waypointLine = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+assert(_G.WOWC_TEST_LAST_WAYPOINT == nil, "a reply with a waypoint never sets it on its own")
+local waypointLine = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
 assert(waypointLine:find("||H", 1, true) ~= nil, "a waypoint label with a raw WoW escape is sanitized before printing")
 
 ns.Core.dispatch({
@@ -87,13 +89,16 @@ ns.Core.dispatch({
   full = "no map",
   waypoint = { label = "Nowhere", x = 10, y = 20, uiMapId = 999 },
 })
-local refusedLine = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
-assert(refusedLine:find("no_waypoint_map", 1, true) ~= nil, "a waypoint the client refuses prints a no_waypoint_map line")
+local offer = ns.AiWindow.entries()[#ns.AiWindow.entries()]
+assert(_G.WOWC_TEST_LAST_WAYPOINT == nil, "a refused waypoint is not tried either until the player clicks")
+ns.AiWindow.handleAddonLink(offer.display:match("|H(addon:[^|]+)|h"))
+local refusedLine = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
+assert(refusedLine:find("no_waypoint_map", 1, true) ~= nil, "clicking a waypoint the client refuses prints a no_waypoint_map line")
 
 ns.Core.dispatch({ t = "options", active = { provider = "claude" } })
 assert(#optionsCalls == 1, "an options message reaches ns.Settings.onOptions")
 
-local messagesBeforeRepeat = #ns.AiWindow.scrollFrame.messages
+local messagesBeforeRepeat = #ns.AiWindow.entries()
 local sentBeforeRepeat = #ns.Transport.sent
 for _ = 1, 2 do
   ns.Core.dispatch({
@@ -107,13 +112,13 @@ for _ = 1, 2 do
   })
 end
 local repeatedCount = 0
-for _, message in ipairs(ns.AiWindow.scrollFrame.messages) do
-  if message.text:find("delivered twice", 1, true) then
+for _, message in ipairs(ns.AiWindow.entries()) do
+  if message.display:find("delivered twice", 1, true) then
     repeatedCount = repeatedCount + 1
   end
 end
 assert(repeatedCount == 1, "a reply delivered twice (at-least-once) prints once")
-assert(#ns.AiWindow.scrollFrame.messages == messagesBeforeRepeat + 2, "the repeat prints neither a second reply nor a second waypoint line")
+assert(#ns.AiWindow.entries() == messagesBeforeRepeat + 2, "the repeat prints neither a second reply nor a second waypoint line")
 assert(#ns.Transport.sent == sentBeforeRepeat, "the repeat sends nothing")
 
 for i = 1, 200 do
@@ -127,16 +132,16 @@ ns.Core.dispatch({
   summary = "delivered twice",
   full = "delivered twice",
 })
-local lastAfterBound = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages].text
+local lastAfterBound = ns.AiWindow.entries()[#ns.AiWindow.entries()].display
 assert(
   lastAfterBound:find("delivered twice", 1, true) ~= nil,
   "the seen-id set is bounded to the 200 most recent ids: the oldest is forgotten"
 )
 
 ns.AiWindow.notice("session |Hexpired|h")
-local noticeMessage = ns.AiWindow.scrollFrame.messages[#ns.AiWindow.scrollFrame.messages]
-assert(noticeMessage.text:find("||H", 1, true) ~= nil, "notice() sanitizes its text")
-assert(noticeMessage.r == 1 and noticeMessage.g == 1 and noticeMessage.b == 0, "notice() prints in the Blizzard system colour")
+local noticeMessage = ns.AiWindow.entries()[#ns.AiWindow.entries()]
+assert(noticeMessage.display:find("||H", 1, true) ~= nil, "notice() sanitizes its text")
+assert(noticeMessage.tone == "yellow", "notice() prints in the Blizzard system colour")
 
 ns.Transport.sent = {}
 _G.SlashCmdList["AI"]("help me find Hogger")
@@ -205,10 +210,10 @@ ns.Core.dispatch({ t = "reply", id = "before-reload", chat = "default", provider
 local reloadedAgain = loadFresh("sessionC")
 reloadedAgain.AiWindow.onReply({ t = "reply", id = "before-reload", chat = "default", provider = "claude", summary = "shown once", full = "shown once" })
 assert(
-  #reloadedAgain.AiWindow.scrollFrame.messages == 0,
+  #reloadedAgain.AiWindow.entries() == 0,
   "a reply re-queued after a reload, already shown before it, is not printed again"
 )
 reloadedAgain.AiWindow.onReply({ t = "reply", id = "after-reload", chat = "default", provider = "claude", summary = "new", full = "new" })
-assert(#reloadedAgain.AiWindow.scrollFrame.messages == 1, "a reply not shown before the reload still prints")
+assert(#reloadedAgain.AiWindow.entries() == 1, "a reply not shown before the reload still prints")
 
 print("ai.route: all assertions passed")

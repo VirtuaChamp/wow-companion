@@ -1,6 +1,6 @@
 import { isProviderId } from "@wow-companion/contracts";
 import type { ProviderId, Result } from "@wow-companion/contracts";
-import type { ChatState, ChatsState, HistoryLine } from "../core/chats.ts";
+import type { ChatState, ChatsState, HistoryLine, TitleSource } from "../core/chats.ts";
 import { isRecord, readJsonFile, writeJsonAtomic } from "./json-file.ts";
 
 export type StateStoreError = "read_missing" | "read_failed" | "parse_failed" | "write_failed";
@@ -37,6 +37,12 @@ function parseHistory(value: unknown): HistoryLine[] | undefined {
   return lines;
 }
 
+const GENERATED_NAME = /^Chat \d+$/;
+
+function legacyTitleSource(name: string): TitleSource {
+  return name === "Default" || GENERATED_NAME.test(name) ? "auto" : "user";
+}
+
 function parseChatState(value: unknown): ChatState | undefined {
   if (!isRecord(value)) return undefined;
   if (!isString(value.id) || !isString(value.name) || !isProviderId(value.provider))
@@ -44,9 +50,12 @@ function parseChatState(value: unknown): ChatState | undefined {
   if (!isNumber(value.unread) || !isNumber(value.lastAt)) return undefined;
   const history = parseHistory(value.history);
   if (history === undefined) return undefined;
+  const titleSource = value.titleSource ?? legacyTitleSource(value.name);
+  if (titleSource !== "auto" && titleSource !== "user") return undefined;
   const chat: ChatState = {
     id: value.id,
     name: value.name,
+    titleSource,
     provider: value.provider,
     unread: value.unread,
     lastAt: value.lastAt,

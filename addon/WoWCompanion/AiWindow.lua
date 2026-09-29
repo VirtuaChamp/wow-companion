@@ -5,33 +5,103 @@ ns.AiWindow = ns.AiWindow or {}
 local AiWindow = ns.AiWindow
 
 local SUBCOMMANDS = { "new", "chat", "settings", "report", "reset", "cancel", "help", "context" }
-local WINDOW_WIDTH_DEFAULT = 420
-local WINDOW_HEIGHT_DEFAULT = 320
+local WINDOW_WIDTH_DEFAULT = 680
+local WINDOW_HEIGHT_DEFAULT = 420
 local POPUP_MAX_ROWS = 8
 local POPUP_ROW_HEIGHT = 16
-local MAX_REPLIES = 200
 local MAX_SEEN_REPLY_IDS = 200
 local ASK_ID_SESSION_MAX = 40
-local MORE_BOX_WIDTH = 460
-local MORE_BOX_HEIGHT = 360
-local MORE_BOX_PADDING = 10
-local MORE_BOX_SCROLLBAR_ALLOWANCE = 18
-local MORE_BOX_LINE_PADDING = 4
-local RESIZE_MIN_WIDTH = 280
-local RESIZE_MIN_HEIGHT = 180
-local RESIZE_MAX_WIDTH = 900
-local RESIZE_MAX_HEIGHT = 700
+local COPY_BOX_WIDTH = 460
+local COPY_BOX_HEIGHT = 360
+local COPY_BOX_PADDING = 10
+local COPY_BOX_SCROLLBAR_ALLOWANCE = 18
+local COPY_BOX_LINE_PADDING = 4
+local BULLET = "\226\128\162 "
+local ELLIPSIS = "\226\128\166"
+local SIDEBAR_REFRESH_SECONDS = 45
+local EMPTY_HINT = "Ask anything about your game"
+local DEFAULT_TEXT_SIZE = "normal"
+local TEXT_SIZES = {
+  {
+    key = "small",
+    label = "Small",
+    body = "GameFontHighlightSmall",
+    meta = "GameFontNormalSmall",
+    bodyHeight = 10,
+    metaHeight = 10,
+  },
+  {
+    key = "normal",
+    label = "Normal",
+    body = "GameFontHighlight",
+    meta = "GameFontNormal",
+    bodyHeight = 12,
+    metaHeight = 12,
+  },
+  {
+    key = "large",
+    label = "Large",
+    body = "GameFontHighlightMedium",
+    meta = "GameFontNormalMed3",
+    bodyHeight = 14,
+    metaHeight = 14,
+  },
+  {
+    key = "larger",
+    label = "Larger",
+    body = "GameFontHighlightLarge",
+    meta = "GameFontNormalLarge",
+    bodyHeight = 16,
+    metaHeight = 16,
+  },
+}
+local SIDEBAR_MAX_WIDTH = 200
+local CHAT_ROW_LINE_GAP = 4
+local CHAT_ROW_VERTICAL_PADDING = 5
+local NAME_MARGIN = 4
+local MAX_CACHED_CHATS = 30
+local MAX_WAYPOINT_OFFERS = 400
+local MAX_CHAT_NOTICES = 20
+local LOADING_TEXT = "loading" .. "\226\128\166"
+local DIALOG_NAME_MAX = 28
+local TOOL_PHRASES = {
+  get_game_state = "reading your character",
+  find_npc = "looking up an NPC",
+  find_quest = "looking up a quest",
+  find_object = "looking up an object",
+  suggest_gear_upgrades = "checking gear upgrades",
+  set_waypoint = "setting a waypoint",
+}
+local RESIZE_MIN_WIDTH = 480
+local RESIZE_MIN_HEIGHT = 240
+local RESIZE_MAX_WIDTH = 1100
+local RESIZE_MAX_HEIGHT = 800
 local POPUP_PADDING = 6
 local POPUP_ICON_SIZE = 12
 local QUEST_ICON_ATLAS = "QuestNormal"
 local GEAR_ICON_ATLAS = "questlog-icon-setting"
 local GEAR_GAP_FROM_CLOSE = 6
 local GEAR_HIT_INSET = 4
-local DROPDOWN_LEFT = 12
-local DROPDOWN_TOP = -30
+local SIDEBAR_WIDTH = 140
+local SIDEBAR_PADDING = 6
+local SIDEBAR_BOTTOM_MARGIN = 4
+local SIDEBAR_SCROLLBAR_ALLOWANCE = 14
+local NEW_CHAT_HEIGHT = 22
+local CHAT_ROW_PADDING = 6
+local RUNNING_MARK = "\226\151\143 "
 local LOG_PADDING_X = 8
 local LOG_PADDING_Y = 6
 local LOG_MAX_LINES = 200
+local LIST_SCROLLBAR_ALLOWANCE = 16
+local LIST_SCROLLBAR_GAP = 4
+local LIST_PADDING_X = 6
+local BUBBLE_MAX_FRACTION = 0.75
+local BUBBLE_MIN_WIDTH = 60
+local BUBBLE_PADDING_X = 8
+local BUBBLE_PADDING_Y = 6
+local BUBBLE_NAME_INDENT = 2
+local LINE_MIN_HEIGHT = 12
+local USER_TINT_ALPHA = 0.5
 local INPUT_STRIP_HEIGHT = 26
 local INPUT_BOTTOM = 5
 local INPUT_HEIGHT = 20
@@ -42,21 +112,43 @@ local GRIP_MARGIN = 6
 local GRIP_CLEARANCE = 4
 
 local frame
-local scrollFrame
+local messageBox
+local messageProvider
+local sidebarBox
+local sidebarProvider
+local sidebarView
+local sidebarFrame
+local messageView
+local newChatButton
+local measureText
+local emptyHint
+local sidebarTicker
 local inputBox
-local dropdown
 local popupFrame
-local moreBox
+local copyBox
 local resizeGrip
 local ghostText
 local ghostMeasure
-local moreBoxText = ""
+local copyBoxText = ""
 local askCounter = 0
-local moreCounter = 0
-local replies = {}
-local replyOrder = {}
 local chatsList = {}
 local activeChat = "default"
+local entries = {}
+local statusEntries = {}
+local pendingEntries = {}
+local chatCaches = {}
+local waypointOffers = {}
+local chatNotices = {}
+local waypointOfferOrder = {}
+local waypointCounter = 0
+local cacheOrder = {}
+local shownChat
+local switching
+local loadingEntry
+local bubbleEntries = setmetatable({}, { __mode = "k" })
+local builtRows = setmetatable({}, { __mode = "k" })
+local lastLayoutWidth
+local relayoutPending = false
 
 local function sanitize(text)
   if type(text) ~= "string" then
@@ -65,15 +157,6 @@ local function sanitize(text)
   return (text:gsub("|", "||"))
 end
 AiWindow.sanitize = sanitize
-
-local function rememberReply(id, entry)
-  replies[id] = entry
-  table.insert(replyOrder, id)
-  if #replyOrder > MAX_REPLIES then
-    local oldest = table.remove(replyOrder, 1)
-    replies[oldest] = nil
-  end
-end
 
 local function seenStore()
   WoWCompanionDB = WoWCompanionDB or {}
@@ -105,11 +188,6 @@ local function nextAskId()
   return "ask-" .. token:sub(-ASK_ID_SESSION_MAX) .. "-" .. askCounter
 end
 
-local function nextMoreId()
-  moreCounter = moreCounter + 1
-  return "more-" .. moreCounter
-end
-
 local function providerLabel(providerId)
   if not providerId or providerId == "claude" then
     return "Claude"
@@ -123,14 +201,374 @@ local function providerLabel(providerId)
   return providerId
 end
 
+local function colorWrap(color, text, plain)
+  if plain then
+    return text
+  end
+  return color:WrapTextInColorCode(text)
+end
+
+local function stripEmphasisUnderscores(text)
+  text = text:gsub("^_+", "")
+  text = text:gsub("_+$", "")
+  text = text:gsub("(%s)_+", "%1")
+  text = text:gsub("_+(%s)", "%1")
+  return text
+end
+
+local function stripMarkers(text)
+  text = text:gsub("[%*`]", "")
+  return stripEmphasisUnderscores(text)
+end
+
+local function renderInline(line, plain)
+  local out = {}
+  local i = 1
+  local length = #line
+  while i <= length do
+    local character = line:sub(i, i)
+    if line:sub(i, i + 1) == "**" then
+      local close = line:find("**", i + 2, true)
+      if close and close > i + 2 then
+        out[#out + 1] = colorWrap(NORMAL_FONT_COLOR, stripMarkers(line:sub(i + 2, close - 1)), plain)
+        i = close + 2
+      else
+        i = i + 2
+      end
+    elseif character == "`" then
+      local close = line:find("`", i + 1, true)
+      if close and close > i + 1 then
+        out[#out + 1] = colorWrap(GRAY_FONT_COLOR, line:sub(i + 1, close - 1), plain)
+        i = close + 1
+      else
+        i = i + 1
+      end
+    elseif character == "*" then
+      i = i + 1
+    else
+      local stop = line:find("[%*`]", i + 1) or (length + 1)
+      out[#out + 1] = stripEmphasisUnderscores(line:sub(i, stop - 1))
+      i = stop
+    end
+  end
+  return table.concat(out)
+end
+
+local function renderLine(line, plain)
+  local heading = line:match("^%s*#+%s+(.*)$")
+  if heading then
+    return colorWrap(NORMAL_FONT_COLOR, stripMarkers(heading), plain)
+  end
+  local indent, item = line:match("^(%s*)[%-%*]%s+(.*)$")
+  if item then
+    return indent .. BULLET .. renderInline(item, plain)
+  end
+  return renderInline((line:gsub("^%s*#+", "")), plain)
+end
+
+local function renderText(text, plain)
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    lines[#lines + 1] = renderLine(line, plain)
+  end
+  return table.concat(lines, "\n")
+end
+
+local function renderMarkdown(text)
+  return renderText(text, false)
+end
+AiWindow.renderMarkdown = renderMarkdown
+
+local function stripMarkdown(text)
+  return renderText(text, true)
+end
+AiWindow.stripMarkdown = stripMarkdown
+
+local function currentSize()
+  WoWCompanionDB = WoWCompanionDB or {}
+  local wanted = WoWCompanionDB.textSize or DEFAULT_TEXT_SIZE
+  for _, size in ipairs(TEXT_SIZES) do
+    if size.key == wanted then
+      return size
+    end
+  end
+  for _, size in ipairs(TEXT_SIZES) do
+    if size.key == DEFAULT_TEXT_SIZE then
+      return size
+    end
+  end
+end
+
+local function bodyFont()
+  return _G[currentSize().body]
+end
+
+local function metaFont()
+  return _G[currentSize().meta]
+end
+
+local function fontHeight(font, fallback)
+  local _, height = font:GetFont()
+  return height or fallback
+end
+
+local function sizeMetrics()
+  local size = currentSize()
+  local body = fontHeight(_G[size.body], size.bodyHeight)
+  local meta = fontHeight(_G[size.meta], size.metaHeight)
+  local reference = fontHeight(_G[TEXT_SIZES[1].body], TEXT_SIZES[1].bodyHeight)
+  return {
+    nameRoom = math.ceil(meta) + NAME_MARGIN,
+    rowHeight = math.ceil(body) + math.ceil(meta) + CHAT_ROW_LINE_GAP + 2 * CHAT_ROW_VERTICAL_PADDING,
+    sidebarWidth = math.min(SIDEBAR_MAX_WIDTH, math.floor(SIDEBAR_WIDTH * body / reference)),
+  }
+end
+
+function AiWindow.textSize()
+  return currentSize().key
+end
+
+function AiWindow.textSizeChoices()
+  local choices = {}
+  for i, size in ipairs(TEXT_SIZES) do
+    choices[i] = { key = size.key, label = size.label }
+  end
+  return choices
+end
+
+local function isAtEnd()
+  if not messageBox:HasScrollableExtent() then
+    return true
+  end
+  return messageBox:GetScrollPercentage() >= ScrollBoxConstants.ScrollEnd
+end
+
+local function scrollToEnd()
+  messageBox:ScrollToEnd(ScrollBoxConstants.NoScrollInterpolation)
+end
+
+local function textLayout(entry)
+  local listWidth = messageBox:GetWidth()
+  if entry.kind == "line" or entry.kind == "status" then
+    local width = math.max(1, listWidth - 2 * LIST_PADDING_X)
+    measureText:SetWidth(width)
+    measureText:SetText(entry.display)
+    return { textWidth = width, height = math.max(LINE_MIN_HEIGHT, math.ceil(measureText:GetStringHeight())) }
+  end
+  local maxBubble = math.max(BUBBLE_MIN_WIDTH, math.floor(listWidth * BUBBLE_MAX_FRACTION))
+  local maxText = maxBubble - 2 * BUBBLE_PADDING_X
+  measureText:SetWidth(0)
+  measureText:SetText(entry.display)
+  local textWidth = math.min(math.ceil(measureText:GetStringWidth()) + 1, maxText)
+  measureText:SetWidth(textWidth)
+  local textHeight = math.ceil(measureText:GetStringHeight())
+  return {
+    textWidth = textWidth,
+    width = textWidth + 2 * BUBBLE_PADDING_X,
+    height = textHeight + 2 * BUBBLE_PADDING_Y,
+  }
+end
+
+local function entryExtent(_, entry)
+  return textLayout(entry).height
+end
+
+local function onRowLinkClick(_, link, text, button)
+  SetItemRef(link, text, button, messageBox)
+end
+
+local function onBubbleMouseUp(bubble, button)
+  local entry = bubbleEntries[bubble]
+  if button ~= "RightButton" or not entry then
+    return
+  end
+  MenuUtil.CreateContextMenu(bubble, function(_, root)
+    root:CreateButton("Copy text", function()
+      AiWindow.openCopyBox(entry.full, entry.kind == "user")
+    end)
+  end)
+end
+
+local function onBubbleEnter(bubble)
+  GameTooltip:SetOwner(bubble, "ANCHOR_RIGHT")
+  GameTooltip:SetText("Right-click: copy text")
+  GameTooltip:Show()
+end
+
+local function onBubbleLeave()
+  GameTooltip:Hide()
+end
+
+local function buildRow(row)
+  builtRows[row] = true
+  local bubble = CreateFrame("Frame", nil, row, "TooltipBackdropTemplate")
+  bubble.text = bubble:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  bubble:EnableMouse(true)
+  bubble:SetScript("OnMouseUp", onBubbleMouseUp)
+  bubble:SetScript("OnEnter", onBubbleEnter)
+  bubble:SetScript("OnLeave", onBubbleLeave)
+  row.bubble = bubble
+  row.who = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.line = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row:SetHyperlinksEnabled(true)
+  row:SetScript("OnHyperlinkClick", onRowLinkClick)
+end
+
+local function initBubble(row, entry, layout)
+  local bubble = row.bubble
+  bubbleEntries[bubble] = entry
+  row.line:Hide()
+  bubble:ClearAllPoints()
+  bubble:SetSize(layout.width, layout.height)
+  bubble.text:SetFontObject(bodyFont())
+  bubble.text:SetJustifyH("LEFT")
+  bubble.text:ClearAllPoints()
+  bubble.text:SetPoint("TOPLEFT", bubble, "TOPLEFT", BUBBLE_PADDING_X, -BUBBLE_PADDING_Y)
+  bubble.text:SetWidth(layout.textWidth)
+  bubble.text:SetText(entry.display)
+  local r, g, b
+  if entry.kind == "user" then
+    bubble:SetPoint("TOPRIGHT", row, "TOPRIGHT", -LIST_PADDING_X, 0)
+    r, g, b = GRAY_FONT_COLOR:GetRGB()
+    bubble:SetBackdropColor(r, g, b, USER_TINT_ALPHA)
+    row.who:Hide()
+  else
+    bubble:SetPoint("TOPLEFT", row, "TOPLEFT", LIST_PADDING_X, 0)
+    r, g, b = TOOLTIP_DEFAULT_BACKGROUND_COLOR:GetRGB()
+    bubble:SetBackdropColor(r, g, b, 1)
+    row.who:SetFontObject(metaFont())
+    row.who:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+    row.who:ClearAllPoints()
+    row.who:SetPoint("TOPLEFT", bubble, "BOTTOMLEFT", BUBBLE_NAME_INDENT, -1)
+    row.who:SetText(sanitize(providerLabel(entry.provider)))
+    row.who:Show()
+  end
+  bubble:Show()
+end
+
+local function initLine(row, entry, layout)
+  row.bubble:Hide()
+  row.who:Hide()
+  row.line:SetFontObject(bodyFont())
+  row.line:SetJustifyH("LEFT")
+  row.line:ClearAllPoints()
+  row.line:SetPoint("TOPLEFT", row, "TOPLEFT", LIST_PADDING_X, 0)
+  row.line:SetWidth(layout.textWidth)
+  if entry.tone == "yellow" then
+    row.line:SetTextColor(YELLOW_FONT_COLOR:GetRGB())
+  else
+    row.line:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  end
+  row.line:SetText(entry.display)
+  row.line:Show()
+end
+
+local function initRow(row, entry)
+  if not builtRows[row] then
+    buildRow(row)
+  end
+  local layout = textLayout(entry)
+  if entry.kind == "line" or entry.kind == "status" then
+    initLine(row, entry, layout)
+  else
+    initBubble(row, entry, layout)
+  end
+end
+
+local function updateEmptyHint()
+  if emptyHint then
+    if #entries == 0 then
+      emptyHint:Show()
+    else
+      emptyHint:Hide()
+    end
+  end
+end
+
+local function addEntry(entry)
+  if not messageProvider then
+    pendingEntries[#pendingEntries + 1] = entry
+    if #pendingEntries > LOG_MAX_LINES then
+      table.remove(pendingEntries, 1)
+    end
+    return
+  end
+  local wasAtEnd = isAtEnd()
+  table.insert(entries, entry)
+  messageProvider:Insert(entry)
+  if #entries > LOG_MAX_LINES then
+    messageProvider:Remove(table.remove(entries, 1))
+  end
+  updateEmptyHint()
+  if wasAtEnd then
+    scrollToEnd()
+  end
+end
+
+local function removeEntry(entry)
+  for index, candidate in ipairs(entries) do
+    if candidate == entry then
+      table.remove(entries, index)
+      messageProvider:Remove(entry)
+      updateEmptyHint()
+      return
+    end
+  end
+end
+
+local function clearStatus(askId)
+  local entry = statusEntries[askId]
+  if entry then
+    statusEntries[askId] = nil
+    removeEntry(entry)
+  end
+end
+
+local function replaceEntries(list)
+  entries = list
+  statusEntries = {}
+  messageProvider = CreateDataProvider()
+  messageProvider:InsertTable(list)
+  messageBox:SetDataProvider(messageProvider)
+  updateEmptyHint()
+  scrollToEnd()
+end
+
 local function greyLine(text)
-  local r, g, b = GRAY_FONT_COLOR:GetRGB()
-  scrollFrame:AddMessage(text, r, g, b)
+  addEntry({ kind = "line", tone = "grey", display = text })
 end
 
 function AiWindow.notice(text)
-  local r, g, b = YELLOW_FONT_COLOR:GetRGB()
-  scrollFrame:AddMessage(sanitize(text), r, g, b)
+  addEntry({ kind = "line", tone = "yellow", display = sanitize(text) })
+end
+
+function AiWindow.entries()
+  return entries
+end
+
+local function relayoutMessages()
+  relayoutPending = false
+  if not messageBox then
+    return
+  end
+  local width = messageBox:GetWidth()
+  if width == lastLayoutWidth then
+    return
+  end
+  lastLayoutWidth = width
+  local wasAtEnd = isAtEnd()
+  messageBox:Rebuild(ScrollBoxConstants.RetainScrollPosition)
+  if wasAtEnd then
+    scrollToEnd()
+  end
+end
+
+local function scheduleRelayout()
+  if relayoutPending then
+    return
+  end
+  relayoutPending = true
+  C_Timer.After(0, relayoutMessages)
 end
 
 local function relativeLabel(now, lastAt)
@@ -192,7 +630,10 @@ local function restoreGeometry()
   frame:ClearAllPoints()
   if saved then
     frame:SetPoint(saved.point, UIParent, saved.relativePoint, saved.x, saved.y)
-    frame:SetSize(saved.width, saved.height)
+    frame:SetSize(
+      math.min(RESIZE_MAX_WIDTH, math.max(RESIZE_MIN_WIDTH, saved.width)),
+      math.min(RESIZE_MAX_HEIGHT, math.max(RESIZE_MIN_HEIGHT, saved.height))
+    )
   else
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     frame:SetSize(WINDOW_WIDTH_DEFAULT, WINDOW_HEIGHT_DEFAULT)
@@ -388,7 +829,7 @@ function AiWindow.acceptPopup(box)
   elseif popup.kind == "chat" then
     if pick then
       box:SetText("")
-      ns.Transport.send({ t = "cmd", chat = pick.chatId, name = "open" })
+      AiWindow.switchToChat(pick.chatId)
     end
   elseif popup.kind == "mention" then
     if pick then
@@ -422,25 +863,145 @@ local function resolveMentions(text)
   return mentions
 end
 
-function AiWindow.printLine(who, summary, full, providerId)
-  local clean = sanitize(summary)
-  local text
+local function messageEntry(who, text, providerId, waypoint)
   if who == "you" then
-    text = "[You] " .. clean
-  else
-    text = "[" .. providerLabel(providerId) .. "] whispers: " .. clean
+    return { kind = "user", display = sanitize(text), full = text }
   end
-  if full and full ~= summary then
-    local moreId = nextMoreId()
-    rememberReply(moreId, { summary = summary, full = full })
-    text = text .. " " .. LinkUtil.FormatLink(LinkTypes.AddOn, "[more]", addonName, "more", moreId)
+  return {
+    kind = "ai",
+    provider = providerId or who,
+    display = renderMarkdown(sanitize(text)),
+    full = text,
+    waypoint = waypoint,
+  }
+end
+
+local function offerLine(entry)
+  local waypoint = entry.waypoint
+  if not entry.waypointId then
+    waypointCounter = waypointCounter + 1
+    entry.waypointId = "wp-" .. waypointCounter
+    waypointOffers[entry.waypointId] = waypoint
+    waypointOfferOrder[#waypointOfferOrder + 1] = entry.waypointId
+    if #waypointOfferOrder > MAX_WAYPOINT_OFFERS then
+      waypointOffers[table.remove(waypointOfferOrder, 1)] = nil
+    end
   end
-  local r, g, b = NORMAL_FONT_COLOR:GetRGB()
-  scrollFrame:AddMessage(text, r, g, b)
+  local link = LinkUtil.FormatLink(LinkTypes.AddOn, "[Set waypoint]", addonName, "waypoint", entry.waypointId)
+  local coords = "(" .. tostring(waypoint.x) .. ", " .. tostring(waypoint.y) .. ")"
+  return {
+    kind = "line",
+    tone = "grey",
+    display = "waypoint: " .. sanitize(waypoint.label or "") .. " " .. coords .. " " .. link,
+  }
+end
+
+local function expandOffers(list)
+  local expanded = {}
+  for _, entry in ipairs(list) do
+    expanded[#expanded + 1] = entry
+    if entry.waypoint then
+      expanded[#expanded + 1] = offerLine(entry)
+    end
+  end
+  return expanded
+end
+
+local function withNotices(chatId, list)
+  for _, notice in ipairs(chatNotices[chatId] or {}) do
+    list[#list + 1] = notice
+  end
+  return list
+end
+
+local function carryWaypoints(list, previous)
+  if not previous then
+    return
+  end
+  for index, entry in ipairs(list) do
+    local old = previous[index]
+    if entry.kind == "ai" and old and old.kind == "ai" and old.full == entry.full and old.waypoint then
+      entry.waypoint = old.waypoint
+      entry.waypointId = old.waypointId
+    end
+  end
+end
+
+local function touchCache(chatId)
+  for index, id in ipairs(cacheOrder) do
+    if id == chatId then
+      table.remove(cacheOrder, index)
+      break
+    end
+  end
+  cacheOrder[#cacheOrder + 1] = chatId
+  while #cacheOrder > MAX_CACHED_CHATS do
+    local dropped
+    for index, id in ipairs(cacheOrder) do
+      if id ~= shownChat then
+        dropped = table.remove(cacheOrder, index)
+        break
+      end
+    end
+    if not dropped then
+      break
+    end
+    chatCaches[dropped] = nil
+  end
+end
+
+local function cacheAppend(chatId, entry, create)
+  local cache = chatCaches[chatId]
+  if not cache then
+    if not create then
+      return
+    end
+    cache = {}
+    chatCaches[chatId] = cache
+  end
+  cache[#cache + 1] = entry
+  if #cache > LOG_MAX_LINES then
+    table.remove(cache, 1)
+  end
+  touchCache(chatId)
+end
+
+local function dropCache(chatId)
+  chatCaches[chatId] = nil
+  chatNotices[chatId] = nil
+  for index, id in ipairs(cacheOrder) do
+    if id == chatId then
+      table.remove(cacheOrder, index)
+      break
+    end
+  end
+end
+
+local function sameMessages(a, b)
+  if #a ~= #b then
+    return false
+  end
+  for index, entry in ipairs(a) do
+    local other = b[index]
+    if entry.kind ~= other.kind or entry.provider ~= other.provider or entry.full ~= other.full then
+      return false
+    end
+  end
+  return true
+end
+
+function AiWindow.printLine(who, text, providerId, waypoint)
+  local entry = messageEntry(who, text, providerId, waypoint)
+  addEntry(entry)
+  if waypoint then
+    addEntry(offerLine(entry))
+  end
+  cacheAppend(activeChat, entry, true)
 end
 
 function AiWindow.submitAsk(text)
   AiWindow.show()
+  chatNotices[activeChat] = nil
   local askId = nextAskId()
   local seq, err = ns.Transport.send({
     t = "ask",
@@ -457,7 +1018,7 @@ function AiWindow.submitAsk(text)
     end
     return nil, err
   end
-  AiWindow.printLine("you", text, nil, nil)
+  AiWindow.printLine("you", text)
   return askId
 end
 
@@ -472,7 +1033,7 @@ function AiWindow.openChatByName(name)
   end
   for _, entry in ipairs(chatsList) do
     if entry.name == name then
-      ns.Transport.send({ t = "cmd", chat = entry.id, name = "open" })
+      AiWindow.switchToChat(entry.id)
       return
     end
   end
@@ -495,96 +1056,315 @@ function AiWindow.printContext()
   greyLine("[Claude] equipped " .. #(snapshot.equipped or {}) .. ", bags " .. #(snapshot.bags or {}))
 end
 
-_G.StaticPopupDialogs = _G.StaticPopupDialogs or {}
-_G.StaticPopupDialogs["WOWCOMPANION_RENAME_CHAT"] = {
-  text = "Rename this chat:",
-  button1 = "Rename",
-  button2 = "Cancel",
-  hasEditBox = true,
-  timeout = 0,
-  whileDead = true,
-  hideOnEscape = true,
-  OnAccept = function(dialog, chatId)
-    local newName = dialog:GetEditBox():GetText()
-    if newName and newName ~= "" and chatId then
-      ns.Transport.send({ t = "cmd", chat = chatId, name = "rename", arg = newName })
-    end
-  end,
-}
-_G.StaticPopupDialogs["WOWCOMPANION_DELETE_CHAT"] = {
-  text = "Delete this chat?",
-  button1 = "Delete",
-  button2 = "Cancel",
-  timeout = 0,
-  whileDead = true,
-  hideOnEscape = true,
-  OnAccept = function(_, chatId)
-    if chatId then
-      ns.Transport.send({ t = "cmd", chat = chatId, name = "delete" })
-    end
-  end,
-}
+local DIALOG_WIDTH = 320
+local DIALOG_TOP = 36
+local DIALOG_PADDING = 16
+local DIALOG_BUTTON_WIDTH = 110
+local DIALOG_BUTTON_HEIGHT = 22
+local DIALOG_INPUT_HEIGHT = 22
+local DIALOG_INPUT_GAP = 8
 
-function AiWindow.rebuildDropdown()
-  if not dropdown then
+local chatDialog
+local dialogMode
+local dialogChatId
+
+local function closeChatDialog()
+  dialogChatId = nil
+  dialogMode = nil
+  if chatDialog then
+    chatDialog:Hide()
+  end
+end
+
+local function acceptChatDialog()
+  if not dialogChatId then
     return
   end
-  local now = GetServerTime()
-  dropdown:SetupMenu(function(_, root)
-    root:CreateButton("New chat", function()
-      ns.Transport.send({ t = "cmd", chat = activeChat, name = "new" })
-    end)
-    for _, entry in ipairs(sortedChatsList()) do
-      local marker = entry.running and "\226\151\143 " or ""
-      local unread = (entry.unread and entry.unread > 0) and (" (" .. entry.unread .. ")") or ""
-      local label = marker
-        .. sanitize(entry.name)
-        .. " \194\183 "
-        .. sanitize(providerLabel(entry.provider))
-        .. " \194\183 "
-        .. relativeLabel(now, entry.lastAt)
-        .. unread
-      local row = root:CreateButton(label, function()
-        ns.Transport.send({ t = "cmd", chat = entry.id, name = "open" })
-      end)
-      row:CreateButton("Rename", function()
-        StaticPopup_Show("WOWCOMPANION_RENAME_CHAT", entry.name, nil, entry.id)
-      end)
-      row:CreateButton("Delete", function()
-        StaticPopup_Show("WOWCOMPANION_DELETE_CHAT", entry.name, nil, entry.id)
-      end)
+  if dialogMode == "rename" then
+    local newName = chatDialog.editBox:GetText():match("^%s*(.-)%s*$")
+    if newName == "" then
+      return
+    end
+    ns.Transport.send({ t = "cmd", chat = dialogChatId, name = "rename", arg = newName })
+  elseif dialogMode == "delete" then
+    ns.Transport.send({ t = "cmd", chat = dialogChatId, name = "delete" })
+  end
+  closeChatDialog()
+end
+
+local function truncateName(name)
+  if #name <= DIALOG_NAME_MAX then
+    return name
+  end
+  local cut = name:sub(1, DIALOG_NAME_MAX - 1):gsub("[\192-\255][\128-\191]*$", "")
+  return cut .. ELLIPSIS
+end
+
+local function buildChatDialog()
+  local dialog = CreateFrame("Frame", "WoWCompanionChatDialog", UIParent, "BasicFrameTemplateWithInset")
+  dialog:SetSize(DIALOG_WIDTH, DIALOG_TOP + DIALOG_PADDING)
+  dialog:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  dialog:SetFrameStrata("DIALOG")
+  dialog:EnableMouse(true)
+  dialog:Hide()
+  dialog.CloseButton:SetScript("OnClick", closeChatDialog)
+  dialog:SetScript("OnHide", function()
+    dialogChatId = nil
+    dialogMode = nil
+  end)
+
+  dialog.message = dialog:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+  dialog.message:SetJustifyH("LEFT")
+  dialog.message:SetWidth(DIALOG_WIDTH - 2 * DIALOG_PADDING)
+  dialog.message:SetPoint("TOPLEFT", dialog, "TOPLEFT", DIALOG_PADDING, -DIALOG_TOP)
+
+  local editBox = CreateFrame("EditBox", "WoWCompanionChatDialogInput", dialog, "InputBoxTemplate")
+  editBox:SetAutoFocus(false)
+  editBox:SetHeight(DIALOG_INPUT_HEIGHT)
+  editBox:SetPoint("TOPLEFT", dialog.message, "BOTTOMLEFT", 6, -DIALOG_INPUT_GAP)
+  editBox:SetPoint("TOPRIGHT", dialog.message, "BOTTOMRIGHT", -6, -DIALOG_INPUT_GAP)
+  editBox:SetScript("OnEnterPressed", function()
+    if dialogMode == "rename" then
+      acceptChatDialog()
     end
   end)
-  dropdown:OverrideText(sanitize(AiWindow.chatName(activeChat)))
+  editBox:SetScript("OnEscapePressed", closeChatDialog)
+  dialog.editBox = editBox
+
+  local accept = CreateFrame("Button", "WoWCompanionChatDialogAccept", dialog, "UIPanelButtonTemplate")
+  accept:SetSize(DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT)
+  accept:SetPoint("BOTTOMRIGHT", dialog, "BOTTOM", -4, DIALOG_PADDING)
+  accept:SetScript("OnClick", acceptChatDialog)
+  dialog.accept = accept
+
+  local cancel = CreateFrame("Button", "WoWCompanionChatDialogCancel", dialog, "UIPanelButtonTemplate")
+  cancel:SetSize(DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT)
+  cancel:SetPoint("BOTTOMLEFT", dialog, "BOTTOM", 4, DIALOG_PADDING)
+  cancel:SetText("Cancel")
+  cancel:SetScript("OnClick", closeChatDialog)
+  dialog.cancel = cancel
+
+  table.insert(UISpecialFrames, dialog:GetName())
+  return dialog
+end
+
+function AiWindow.showChatDialog(mode, chat)
+  if not chatDialog then
+    chatDialog = buildChatDialog()
+    AiWindow.chatDialog = chatDialog
+  end
+  dialogMode = mode
+  dialogChatId = chat.id
+  local withField = mode == "rename"
+  if withField then
+    chatDialog.TitleText:SetText("Rename chat")
+    chatDialog.message:SetText("New name for this chat:")
+    chatDialog.accept:SetText("Rename")
+    chatDialog.editBox:Show()
+    chatDialog.editBox:SetText(chat.name)
+  else
+    chatDialog.TitleText:SetText("Delete chat")
+    chatDialog.message:SetText("This removes " .. sanitize(truncateName(chat.name)) .. " and its history.")
+    chatDialog.accept:SetText("Delete")
+    chatDialog.editBox:ClearFocus()
+    chatDialog.editBox:Hide()
+  end
+  local messageHeight = math.ceil(chatDialog.message:GetStringHeight())
+  local fieldHeight = withField and (DIALOG_INPUT_GAP + DIALOG_INPUT_HEIGHT) or 0
+  local chrome = DIALOG_TOP + DIALOG_PADDING + DIALOG_BUTTON_HEIGHT + DIALOG_PADDING
+  chatDialog:SetHeight(chrome + messageHeight + fieldHeight)
+  chatDialog:Show()
+  if withField then
+    chatDialog.editBox:HighlightText()
+    chatDialog.editBox:SetFocus()
+  end
+end
+
+local function showChatMenu(row, chat)
+  MenuUtil.CreateContextMenu(row, function(_, root)
+    root:CreateButton("Rename", function()
+      AiWindow.showChatDialog("rename", chat)
+    end)
+    root:CreateButton("Delete", function()
+      AiWindow.showChatDialog("delete", chat)
+    end)
+  end)
+end
+
+local function onChatRowClick(row, button)
+  local chat = row.chat
+  if not chat then
+    return
+  end
+  if button == "RightButton" then
+    showChatMenu(row, chat)
+  else
+    AiWindow.switchToChat(chat.id)
+  end
+end
+
+local function showChatTooltip(row)
+  local chat = row.chat
+  if not chat then
+    return
+  end
+  GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+  GameTooltip:SetText(sanitize(chat.name))
+  local r, g, b = GRAY_FONT_COLOR:GetRGB()
+  GameTooltip:AddLine(
+    sanitize(providerLabel(chat.provider)) .. " \194\183 " .. relativeLabel(GetServerTime(), chat.lastAt),
+    r,
+    g,
+    b
+  )
+  GameTooltip:AddLine("Right-click: rename or delete", r, g, b)
+  GameTooltip:Show()
+end
+
+local function buildChatRow(row)
+  builtRows[row] = true
+  row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+  row:SetHighlightAtlas("Options_List_Hover", "ADD")
+  row.selection = row:CreateTexture(nil, "BACKGROUND")
+  row.selection:SetAtlas("Options_List_Active")
+  row.selection:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+  row.selection:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
+  row.title = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.title:SetJustifyH("LEFT")
+  row.title:SetWordWrap(false)
+  row.title:SetPoint("TOPLEFT", row, "TOPLEFT", CHAT_ROW_PADDING, -5)
+  row.title:SetPoint("TOPRIGHT", row, "TOPRIGHT", -CHAT_ROW_PADDING, -5)
+  row.unread = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.unread:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -CHAT_ROW_PADDING, 5)
+  row.sub = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.sub:SetJustifyH("LEFT")
+  row.sub:SetWordWrap(false)
+  row.sub:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", CHAT_ROW_PADDING, 5)
+  row.sub:SetPoint("BOTTOMRIGHT", row.unread, "BOTTOMLEFT", -CHAT_ROW_PADDING, 0)
+  row:SetScript("OnClick", onChatRowClick)
+  row:SetScript("OnEnter", showChatTooltip)
+  row:SetScript("OnLeave", function()
+    GameTooltip:Hide()
+  end)
+end
+
+local function initChatRow(row, chat)
+  if not builtRows[row] then
+    buildChatRow(row)
+  end
+  row.chat = chat
+  row.title:SetFontObject(bodyFont())
+  row.title:SetJustifyH("LEFT")
+  row.sub:SetFontObject(metaFont())
+  row.sub:SetJustifyH("LEFT")
+  row.sub:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  row.unread:SetFontObject(metaFont())
+  row.title:SetText((chat.running and RUNNING_MARK or "") .. sanitize(chat.name))
+  row.sub:SetText(sanitize(providerLabel(chat.provider)) .. " \194\183 " .. relativeLabel(GetServerTime(), chat.lastAt))
+  row.unread:SetText((chat.unread and chat.unread > 0) and tostring(chat.unread) or "")
+  if chat.id == activeChat then
+    row.selection:Show()
+  else
+    row.selection:Hide()
+  end
+end
+
+local function refreshSidebar()
+  if not sidebarBox then
+    return
+  end
+  sidebarProvider = CreateDataProvider(sortedChatsList())
+  sidebarBox:SetDataProvider(sidebarProvider, ScrollBoxConstants.RetainScrollPosition)
+end
+
+local function refreshSidebarRows()
+  if sidebarBox then
+    sidebarBox:ReinitializeFrames()
+  end
+end
+
+function AiWindow.switchToChat(chatId)
+  ns.Transport.send({ t = "cmd", chat = chatId, name = "open" })
+  if not messageBox or chatId == shownChat then
+    return
+  end
+  switching = chatId
+  activeChat = chatId
+  shownChat = chatId
+  local cached = chatCaches[chatId]
+  if cached then
+    touchCache(chatId)
+    loadingEntry = nil
+    replaceEntries(withNotices(chatId, expandOffers(cached)))
+  else
+    loadingEntry = { kind = "line", tone = "grey", display = LOADING_TEXT }
+    replaceEntries(withNotices(chatId, { loadingEntry }))
+  end
+  refreshSidebarRows()
 end
 
 function AiWindow.onChats(msg)
   chatsList = msg.list or {}
-  activeChat = msg.active or activeChat
-  AiWindow.rebuildDropdown()
+  if not switching then
+    activeChat = msg.active or activeChat
+  end
+  if msg.list then
+    local present = {}
+    for _, entry in ipairs(chatsList) do
+      present[entry.id] = true
+    end
+    local stale = {}
+    for id in pairs(chatCaches) do
+      if not present[id] then
+        stale[#stale + 1] = id
+      end
+    end
+    for _, id in ipairs(stale) do
+      dropCache(id)
+    end
+    for id in pairs(chatNotices) do
+      if not present[id] then
+        chatNotices[id] = nil
+      end
+    end
+  end
+  refreshSidebar()
 end
 
 function AiWindow.onHistory(msg)
+  switching = nil
   activeChat = msg.chat
-  scrollFrame:Clear()
+  local list = {}
   for _, line in ipairs(msg.lines or {}) do
-    AiWindow.printLine(line.who, line.text, nil, line.who)
+    list[#list + 1] = messageEntry(line.who, line.text, line.who)
   end
-  if dropdown then
-    dropdown:OverrideText(sanitize(AiWindow.chatName(activeChat)))
+  local cached = chatCaches[msg.chat]
+  local unchanged = cached ~= nil and shownChat == msg.chat and loadingEntry == nil and sameMessages(cached, list)
+  if unchanged then
+    refreshSidebarRows()
+    return
   end
+  carryWaypoints(list, cached)
+  chatCaches[msg.chat] = list
+  touchCache(msg.chat)
+  shownChat = msg.chat
+  loadingEntry = nil
+  replaceEntries(withNotices(msg.chat, expandOffers(list)))
+  refreshSidebarRows()
 end
 
 function AiWindow.onReply(msg)
   if msg.id then
+    clearStatus(msg.id)
     if replySeen(msg.id) then
       return
     end
     markReplySeen(msg.id)
   end
   if msg.chat == activeChat then
-    AiWindow.printLine(msg.provider, msg.summary, msg.full, msg.provider)
+    AiWindow.printLine(msg.provider, msg.full, msg.provider, msg.waypoint)
   else
+    cacheAppend(msg.chat, messageEntry(msg.provider, msg.full, msg.provider, msg.waypoint), false)
     local openLink = LinkUtil.FormatLink(LinkTypes.AddOn, "[open]", addonName, "open", msg.chat)
     greyLine(
       "["
@@ -595,20 +1375,37 @@ function AiWindow.onReply(msg)
         .. openLink
     )
   end
-  if msg.waypoint then
-    local result = ns.Waypoint and ns.Waypoint.set and ns.Waypoint.set(msg.waypoint)
-    if result == true then
-      local label = sanitize(msg.waypoint.label or "")
-      local coords = "(" .. tostring(msg.waypoint.x) .. ", " .. tostring(msg.waypoint.y) .. ")"
-      greyLine("[Claude] waypoint: " .. label .. " " .. coords)
-    elseif result then
-      greyLine(sanitize("[Claude] waypoint: " .. tostring(result)))
+end
+
+local function chatProvider(chatId)
+  for _, entry in ipairs(chatsList) do
+    if entry.id == chatId then
+      return entry.provider
     end
   end
+  return "claude"
 end
 
 function AiWindow.onProgress(msg)
-  greyLine("[Claude] " .. sanitize(msg.detail or msg.status or ""))
+  if replySeen(msg.id) or msg.chat ~= activeChat then
+    return
+  end
+  local what
+  if msg.status == "tool" then
+    local tool = (msg.detail or ""):gsub("^mcp__wowc__", "")
+    what = (TOOL_PHRASES[tool] or ("using " .. sanitize(tool))) .. ELLIPSIS
+  elseif msg.status == "queued" then
+    what = "queued" .. ELLIPSIS
+  else
+    what = "thinking" .. ELLIPSIS
+  end
+  clearStatus(msg.id)
+  local entry = {
+    kind = "status",
+    display = sanitize(providerLabel(chatProvider(msg.chat))) .. " \194\183 " .. what,
+  }
+  statusEntries[msg.id] = entry
+  addEntry(entry)
 end
 
 local ERROR_LINES = {
@@ -620,59 +1417,71 @@ local ERROR_LINES = {
 }
 
 function AiWindow.onError(msg)
+  if msg.id then
+    clearStatus(msg.id)
+  end
   local line = ERROR_LINES[msg.code] or ("[Claude] error: " .. sanitize(tostring(msg.code)))
+  if msg.chat and msg.chat ~= activeChat then
+    local notices = chatNotices[msg.chat] or {}
+    chatNotices[msg.chat] = notices
+    notices[#notices + 1] = { kind = "line", tone = "grey", display = line }
+    if #notices > MAX_CHAT_NOTICES then
+      table.remove(notices, 1)
+    end
+    return
+  end
   greyLine(line)
 end
 
-local function layoutMoreBoxText()
-  local scroll = moreBox.scrollFrame
-  local textWidth = scroll:GetWidth() - MORE_BOX_SCROLLBAR_ALLOWANCE
-  moreBox.editBox:SetWidth(textWidth)
-  moreBox.measure:SetWidth(textWidth)
-  local textHeight = math.ceil(moreBox.measure:GetStringHeight()) + MORE_BOX_LINE_PADDING
-  moreBox.editBox:SetHeight(math.max(scroll:GetHeight(), textHeight))
+local function layoutCopyBoxText()
+  local scroll = copyBox.scrollFrame
+  local textWidth = scroll:GetWidth() - COPY_BOX_SCROLLBAR_ALLOWANCE
+  copyBox.editBox:SetWidth(textWidth)
+  copyBox.measure:SetWidth(textWidth)
+  local textHeight = math.ceil(copyBox.measure:GetStringHeight()) + COPY_BOX_LINE_PADDING
+  copyBox.editBox:SetHeight(math.max(scroll:GetHeight(), textHeight))
 end
 
-function AiWindow.openMoreBox(fullText)
-  if not moreBox then
-    moreBox = CreateFrame("Frame", "WoWCompanionMoreBox", UIParent, "ButtonFrameTemplate")
-    ButtonFrameTemplate_HideAttic(moreBox)
-    ButtonFrameTemplate_HideButtonBar(moreBox)
-    ButtonFrameTemplate_HidePortrait(moreBox)
-    moreBox:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    moreBox:SetSize(MORE_BOX_WIDTH, MORE_BOX_HEIGHT)
-    moreBox:SetFrameStrata("DIALOG")
-    if moreBox.TitleContainer and moreBox.TitleContainer.TitleText then
-      moreBox.TitleContainer.TitleText:SetText("Claude \226\128\148 full reply")
+function AiWindow.openCopyBox(fullText, literal)
+  if not copyBox then
+    copyBox = CreateFrame("Frame", "WoWCompanionCopyBox", UIParent, "ButtonFrameTemplate")
+    ButtonFrameTemplate_HideAttic(copyBox)
+    ButtonFrameTemplate_HideButtonBar(copyBox)
+    ButtonFrameTemplate_HidePortrait(copyBox)
+    copyBox:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    copyBox:SetSize(COPY_BOX_WIDTH, COPY_BOX_HEIGHT)
+    copyBox:SetFrameStrata("DIALOG")
+    if copyBox.TitleContainer and copyBox.TitleContainer.TitleText then
+      copyBox.TitleContainer.TitleText:SetText("Copy text")
     end
-    local scroll = CreateFrame("ScrollFrame", "WoWCompanionMoreBoxScroll", moreBox, "InputScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", moreBox.Inset, "TOPLEFT", MORE_BOX_PADDING, -MORE_BOX_PADDING)
-    scroll:SetPoint("BOTTOMRIGHT", moreBox.Inset, "BOTTOMRIGHT", -MORE_BOX_PADDING, MORE_BOX_PADDING)
+    local scroll = CreateFrame("ScrollFrame", "WoWCompanionCopyBoxScroll", copyBox, "InputScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", copyBox.Inset, "TOPLEFT", COPY_BOX_PADDING, -COPY_BOX_PADDING)
+    scroll:SetPoint("BOTTOMRIGHT", copyBox.Inset, "BOTTOMRIGHT", -COPY_BOX_PADDING, COPY_BOX_PADDING)
     scroll.CharCount:Hide()
     local editBox = scroll.EditBox
     editBox:SetMultiLine(true)
     editBox:SetAutoFocus(true)
-    moreBox.measure = moreBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    moreBox.measure:Hide()
+    copyBox.measure = copyBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    copyBox.measure:Hide()
     editBox:HookScript("OnTextChanged", function(box, isUserInput)
       if isUserInput then
-        box:SetText(moreBoxText)
+        box:SetText(copyBoxText)
         box:HighlightText()
       end
     end)
-    moreBox.editBox = editBox
-    moreBox.scrollFrame = scroll
-    scroll:HookScript("OnSizeChanged", layoutMoreBoxText)
+    copyBox.editBox = editBox
+    copyBox.scrollFrame = scroll
+    scroll:HookScript("OnSizeChanged", layoutCopyBoxText)
   end
-  moreBoxText = sanitize(fullText)
-  moreBox:Show()
-  moreBox.measure:SetText(moreBoxText)
-  layoutMoreBoxText()
-  moreBox.editBox:SetText(moreBoxText)
-  moreBox.editBox:HighlightText()
-  moreBox.editBox:SetFocus()
-  AiWindow.moreBox = moreBox
-  AiWindow.moreBoxEditBox = moreBox.editBox
+  copyBoxText = literal and sanitize(fullText) or stripMarkdown(sanitize(fullText))
+  copyBox:Show()
+  copyBox.measure:SetText(copyBoxText)
+  layoutCopyBoxText()
+  copyBox.editBox:SetText(copyBoxText)
+  copyBox.editBox:HighlightText()
+  copyBox.editBox:SetFocus()
+  AiWindow.copyBox = copyBox
+  AiWindow.copyBoxEditBox = copyBox.editBox
 end
 
 local function parseAddonLink(link)
@@ -695,13 +1504,19 @@ function AiWindow.handleAddonLink(link)
   if not kind then
     return
   end
-  if kind == "more" then
-    local reply = replies[id]
-    if reply then
-      AiWindow.openMoreBox(reply.full)
-    end
-  elseif kind == "open" then
+  if kind == "open" then
     ns.Transport.send({ t = "cmd", chat = id, name = "open" })
+  elseif kind == "waypoint" then
+    local waypoint = waypointOffers[id]
+    if not waypoint then
+      return
+    end
+    local result = ns.Waypoint and ns.Waypoint.set and ns.Waypoint.set(waypoint)
+    if result == true then
+      greyLine("[Claude] waypoint set: " .. sanitize(waypoint.label or ""))
+    elseif result then
+      greyLine(sanitize("[Claude] waypoint: " .. tostring(result)))
+    end
   end
 end
 
@@ -709,39 +1524,139 @@ EventRegistry:RegisterCallback("SetItemRef", function(_, link)
   AiWindow.handleAddonLink(link)
 end, AiWindow)
 
-function AiWindow.onLogWheel(log, delta)
-  local pageMode = IsShiftKeyDown()
-  if delta > 0 then
-    if pageMode then
-      log:PageUp()
-    else
-      log:ScrollUp()
-    end
-  elseif delta < 0 then
-    if pageMode then
-      log:PageDown()
-    else
-      log:ScrollDown()
-    end
+function AiWindow.onLogWheel(box, delta)
+  if IsShiftKeyDown() then
+    local directions = ScrollControllerMixin.Directions
+    local direction = delta < 0 and directions.Increase or directions.Decrease
+    box:ScrollInDirection(box:GetVisibleExtentPercentage(), direction)
+  else
+    box:OnMouseWheel(delta)
   end
 end
 
-local function buildScrollFrame(parent)
-  scrollFrame = CreateFrame("ScrollingMessageFrame", "WoWCompanionAiWindowScroll", parent)
-  scrollFrame:SetPoint("TOPLEFT", parent.Inset, "TOPLEFT", LOG_PADDING_X, -LOG_PADDING_Y)
-  scrollFrame:SetPoint("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -LOG_PADDING_X, LOG_PADDING_Y)
-  scrollFrame:SetFontObject(GameFontHighlightSmall)
-  scrollFrame:SetIndentedWordWrap(true)
-  scrollFrame:SetJustifyH("LEFT")
-  scrollFrame:SetFading(false)
-  scrollFrame:SetMaxLines(LOG_MAX_LINES)
-  scrollFrame:EnableMouseWheel(true)
-  scrollFrame:SetScript("OnMouseWheel", AiWindow.onLogWheel)
-  scrollFrame:SetHyperlinksEnabled(true)
-  scrollFrame:SetScript("OnHyperlinkClick", function(_, link, text, button)
-    SetItemRef(link, text, button, scrollFrame)
+local function buildSidebar(parent)
+  local sidebar = CreateFrame("Frame", "WoWCompanionAiWindowSidebar", parent, "InsetFrameTemplate")
+  sidebarFrame = sidebar
+  sidebar:SetWidth(sizeMetrics().sidebarWidth)
+  sidebar:SetPoint("TOPLEFT", parent.Inset, "TOPLEFT", 0, 0)
+  sidebar:SetPoint("BOTTOMLEFT", parent.Inset, "BOTTOMLEFT", 0, -(INPUT_STRIP_HEIGHT - SIDEBAR_BOTTOM_MARGIN))
+
+  newChatButton = CreateFrame("Button", "WoWCompanionAiWindowNewChat", sidebar, "UIPanelButtonTemplate")
+  newChatButton:SetHeight(NEW_CHAT_HEIGHT)
+  newChatButton:SetText("New chat")
+  newChatButton:SetPoint("TOPLEFT", sidebar, "TOPLEFT", SIDEBAR_PADDING, -SIDEBAR_PADDING)
+  newChatButton:SetPoint("TOPRIGHT", sidebar, "TOPRIGHT", -SIDEBAR_PADDING, -SIDEBAR_PADDING)
+  newChatButton:SetScript("OnClick", function()
+    ns.Transport.send({ t = "cmd", chat = activeChat, name = "new" })
   end)
-  AiWindow.scrollFrame = scrollFrame
+
+  sidebarBox = CreateFrame("Frame", "WoWCompanionAiWindowChatList", sidebar, "WowScrollBoxList")
+  sidebarBox:SetPoint("TOPLEFT", newChatButton, "BOTTOMLEFT", 0, -SIDEBAR_PADDING)
+  sidebarBox:SetPoint("BOTTOMRIGHT", sidebar, "BOTTOMRIGHT", -SIDEBAR_SCROLLBAR_ALLOWANCE, SIDEBAR_PADDING)
+  local scrollBar = CreateFrame("EventFrame", "WoWCompanionAiWindowChatListBar", sidebar, "MinimalScrollBar")
+  scrollBar:SetPoint("TOPLEFT", sidebarBox, "TOPRIGHT", LIST_SCROLLBAR_GAP, -3)
+  scrollBar:SetPoint("BOTTOMLEFT", sidebarBox, "BOTTOMRIGHT", LIST_SCROLLBAR_GAP, 2)
+  local view = CreateScrollBoxListLinearView()
+  view:SetElementInitializer("Button", initChatRow)
+  view:SetElementExtent(sizeMetrics().rowHeight)
+  sidebarView = view
+  ScrollUtil.InitScrollBoxListWithScrollBar(sidebarBox, scrollBar, view)
+  local anchorsWithBar = {
+    CreateAnchor("TOPLEFT", newChatButton, "BOTTOMLEFT", 0, -SIDEBAR_PADDING),
+    CreateAnchor("BOTTOMRIGHT", sidebar, "BOTTOMRIGHT", -SIDEBAR_SCROLLBAR_ALLOWANCE, SIDEBAR_PADDING),
+  }
+  local anchorsWithoutBar = {
+    anchorsWithBar[1],
+    CreateAnchor("BOTTOMRIGHT", sidebar, "BOTTOMRIGHT", -SIDEBAR_PADDING, SIDEBAR_PADDING),
+  }
+  ScrollUtil.AddManagedScrollBarVisibilityBehavior(sidebarBox, scrollBar, anchorsWithBar, anchorsWithoutBar)
+  sidebarProvider = CreateDataProvider()
+  sidebarBox:SetDataProvider(sidebarProvider)
+
+  AiWindow.sidebar = sidebar
+  AiWindow.sidebarBox = sidebarBox
+  AiWindow.newChatButton = newChatButton
+  return sidebar
+end
+
+local function buildMessageList(parent, sidebar)
+  messageBox = CreateFrame("Frame", "WoWCompanionAiWindowMessages", parent, "WowScrollBoxList")
+  messageBox:SetPoint("TOPLEFT", sidebar, "TOPRIGHT", LOG_PADDING_X, -LOG_PADDING_Y)
+  messageBox:SetPoint("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -LIST_SCROLLBAR_ALLOWANCE, LOG_PADDING_Y)
+  local scrollBar = CreateFrame("EventFrame", "WoWCompanionAiWindowMessagesBar", parent, "MinimalScrollBar")
+  scrollBar:SetPoint("TOPLEFT", messageBox, "TOPRIGHT", LIST_SCROLLBAR_GAP, -3)
+  scrollBar:SetPoint("BOTTOMLEFT", messageBox, "BOTTOMRIGHT", LIST_SCROLLBAR_GAP, 2)
+
+  measureText = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  measureText:SetJustifyH("LEFT")
+  measureText:Hide()
+
+  emptyHint = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  emptyHint:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  emptyHint:SetPoint("TOP", messageBox, "TOP", 0, -LOG_PADDING_Y * 2)
+  emptyHint:SetText(EMPTY_HINT)
+
+  local room = sizeMetrics().nameRoom
+  local view = CreateScrollBoxListLinearView(LOG_PADDING_Y, room, 0, 0, room)
+  messageView = view
+  view:SetElementInitializer("Frame", initRow)
+  view:SetElementExtentCalculator(entryExtent)
+  ScrollUtil.InitScrollBoxListWithScrollBar(messageBox, scrollBar, view)
+  local anchorsWithBar = {
+    CreateAnchor("TOPLEFT", sidebar, "TOPRIGHT", LOG_PADDING_X, -LOG_PADDING_Y),
+    CreateAnchor("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -LIST_SCROLLBAR_ALLOWANCE, LOG_PADDING_Y),
+  }
+  local anchorsWithoutBar = {
+    anchorsWithBar[1],
+    CreateAnchor("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -LOG_PADDING_X, LOG_PADDING_Y),
+  }
+  ScrollUtil.AddManagedScrollBarVisibilityBehavior(messageBox, scrollBar, anchorsWithBar, anchorsWithoutBar)
+  messageProvider = CreateDataProvider()
+  messageBox:SetDataProvider(messageProvider)
+  messageBox:EnableMouseWheel(true)
+  messageBox:SetScript("OnMouseWheel", AiWindow.onLogWheel)
+  messageBox:RegisterCallback(BaseScrollBoxEvents.OnSizeChanged, scheduleRelayout, AiWindow)
+
+  AiWindow.messageBox = messageBox
+  AiWindow.emptyHint = emptyHint
+end
+
+local function applyTextSize()
+  if not frame then
+    return
+  end
+  local size = currentSize()
+  local body = _G[size.body]
+  measureText:SetFontObject(body)
+  emptyHint:SetFontObject(body)
+  emptyHint:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  inputBox:SetFontObject(body)
+  ghostText:SetFontObject(body)
+  ghostText:SetTextColor(GRAY_FONT_COLOR:GetRGB())
+  ghostMeasure:SetFontObject(body)
+  local metrics = sizeMetrics()
+  sidebarFrame:SetWidth(metrics.sidebarWidth)
+  sidebarView:SetElementExtent(metrics.rowHeight)
+  sidebarBox:Rebuild(ScrollBoxConstants.RetainScrollPosition)
+  messageView:SetPadding(LOG_PADDING_Y, metrics.nameRoom, 0, 0, metrics.nameRoom)
+  lastLayoutWidth = messageBox:GetWidth()
+  local wasAtEnd = isAtEnd()
+  messageBox:Rebuild(ScrollBoxConstants.RetainScrollPosition)
+  if wasAtEnd then
+    scrollToEnd()
+  end
+end
+
+function AiWindow.setTextSize(key)
+  for _, size in ipairs(TEXT_SIZES) do
+    if size.key == key then
+      WoWCompanionDB = WoWCompanionDB or {}
+      WoWCompanionDB.textSize = key
+      applyTextSize()
+      return true
+    end
+  end
+  return false
 end
 
 function AiWindow.onInputTextChanged(box, isUserInput)
@@ -800,12 +1715,18 @@ function AiWindow.onInputEnter(box)
   end
 end
 
-local function buildInputBox(parent)
+local function buildInputBox(parent, sidebar)
   inputBox = CreateFrame("EditBox", "WoWCompanionAiWindowInput", parent, "InputBoxTemplate")
   inputBox:SetAutoFocus(false)
   inputBox:SetHeight(INPUT_HEIGHT)
   local belowInset = INPUT_BOTTOM - INPUT_STRIP_HEIGHT
-  inputBox:SetPoint("BOTTOMLEFT", parent.Inset, "BOTTOMLEFT", LOG_PADDING_X + INPUT_CAP_OVERHANG, belowInset)
+  inputBox:SetPoint(
+    "BOTTOMLEFT",
+    sidebar,
+    "BOTTOMRIGHT",
+    LOG_PADDING_X + INPUT_CAP_OVERHANG,
+    INPUT_BOTTOM - SIDEBAR_BOTTOM_MARGIN
+  )
   inputBox:SetPoint("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -(GRIP_SIZE + GRIP_CLEARANCE), belowInset)
   inputBox:SetTextInsets(INPUT_TEXT_INSET, INPUT_TEXT_INSET, 0, 0)
   inputBox:SetScript("OnEnterPressed", AiWindow.onInputEnter)
@@ -845,12 +1766,6 @@ local function buildPopup(parent)
   ghostMeasure:Hide()
   AiWindow.popupFrame = popupFrame
   AiWindow.ghostText = ghostText
-end
-
-local function buildDropdown(parent)
-  dropdown = CreateFrame("DropdownButton", "WoWCompanionAiWindowChats", parent, "WowStyle1DropdownTemplate")
-  dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", DROPDOWN_LEFT, DROPDOWN_TOP)
-  AiWindow.dropdown = dropdown
 end
 
 local function buildGearButton(parent)
@@ -893,6 +1808,7 @@ function AiWindow.create()
   WoWCompanionDB = WoWCompanionDB or {}
 
   frame = CreateFrame("Frame", "WoWCompanionClaudeWindow", UIParent, "ButtonFrameTemplate")
+  ButtonFrameTemplate_HideAttic(frame)
   ButtonFrameTemplate_HidePortrait(frame)
   frame:SetMovable(true)
   frame:SetResizable(true)
@@ -904,20 +1820,40 @@ function AiWindow.create()
     f:StopMovingOrSizing()
     saveGeometry()
   end)
-  frame:SetScript("OnHide", saveGeometry)
+  frame:SetScript("OnHide", function()
+    saveGeometry()
+    if sidebarTicker then
+      sidebarTicker:Cancel()
+      sidebarTicker = nil
+    end
+  end)
+  frame:SetScript("OnShow", function()
+    scheduleRelayout()
+    refreshSidebarRows()
+    if not sidebarTicker then
+      sidebarTicker = C_Timer.NewTicker(SIDEBAR_REFRESH_SECONDS, refreshSidebarRows)
+    end
+  end)
   restoreGeometry()
 
   if frame.TitleContainer and frame.TitleContainer.TitleText then
     frame.TitleContainer.TitleText:SetText("Claude")
   end
 
-  buildDropdown(frame)
+  local sidebar = buildSidebar(frame)
   buildGearButton(frame)
-  buildScrollFrame(frame)
-  buildInputBox(frame)
+  buildMessageList(frame, sidebar)
+  buildInputBox(frame, sidebar)
   buildPopup(frame)
   buildResizeGrip(frame)
-  AiWindow.rebuildDropdown()
+  refreshSidebar()
+  applyTextSize()
+  local buffered = pendingEntries
+  pendingEntries = {}
+  for _, entry in ipairs(buffered) do
+    addEntry(entry)
+  end
+  updateEmptyHint()
   frame:Hide()
 
   AiWindow.frame = frame
@@ -927,6 +1863,15 @@ end
 function AiWindow.show()
   AiWindow.create()
   frame:Show()
+end
+
+function AiWindow.toggle()
+  AiWindow.create()
+  if frame:IsShown() then
+    frame:Hide()
+  else
+    frame:Show()
+  end
 end
 
 function AiWindow.hide()

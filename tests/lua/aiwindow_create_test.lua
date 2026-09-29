@@ -55,7 +55,7 @@ assert(gear.highlightBlendMode == "ADD", "the gear highlight blends additively")
 local grip = ns2.AiWindow.resizeGrip
 assert(grip.template == "PanelResizeButtonTemplate", "the resize grip is Blizzard's PanelResizeButtonTemplate")
 assert(grip.target == reloaded, "the grip resizes the window frame")
-assert(grip.resizeLimits[1] == 280 and grip.resizeLimits[3] == 900, "the grip carries the window's size limits")
+assert(grip.resizeLimits[1] == 480 and grip.resizeLimits[3] == 1100, "the grip carries the window's size limits")
 grip:Fire("OnMouseDown")
 assert(reloaded.sizing == "BOTTOMRIGHT", "pressing the grip starts sizing the window from its bottom right")
 reloaded:SetSize(610, 410)
@@ -71,22 +71,42 @@ assert(insetLeft == 9, "the inset takes the portrait-less left offset Blizzard s
 local _, _, _, titleLeft = reloaded.TitleContainer:GetPointByName("TOPLEFT")
 assert(titleLeft == 0, "the title container is re-anchored to the left edge, no portrait gap")
 
-local INSET_TOP = -60
+assert(reloaded.TopTileStreaks:IsShown() == false, "the empty header band is hidden: no dropdown sits in it any more")
+local _, _, _, atticInsetTop = reloaded.Inset:GetPointByName("TOPLEFT")
+assert(atticInsetTop == 9, "the inset keeps the portrait-less left offset after the attic is hidden first")
+local _, _, _, _, insetTopY = reloaded.Inset:GetPointByName("TOPLEFT")
+assert(insetTopY == -24, "the inset starts right under the title bar once the attic is hidden")
+assert(_G.WoWCompanionAiWindowChats == nil, "the chats dropdown is gone")
+
+local sidebar = ns2.AiWindow.sidebar
+assert(sidebar.template == "InsetFrameTemplate", "the chat sidebar sits in a Blizzard inset")
+assert(sidebar:GetWidth() == 168, "the sidebar is 140 px at Small and 168 px at the default Normal size")
+local sideTopLeft = { sidebar:GetPointByName("TOPLEFT") }
+local sideBottomLeft = { sidebar:GetPointByName("BOTTOMLEFT") }
+assert(sideTopLeft[2] == reloaded.Inset and sideBottomLeft[2] == reloaded.Inset, "the sidebar hangs from the window inset")
+assert(sideTopLeft[4] == 0 and sideTopLeft[5] == 0, "the sidebar starts at the inset's top left corner")
+local newChat = ns2.AiWindow.newChatButton
+assert(newChat.template == "UIPanelButtonTemplate", "New chat is a Blizzard button template")
+assert(newChat:GetText() == "New chat", "the button reads New chat")
+assert(newChat.parent == sidebar, "New chat sits at the top of the sidebar")
+local chatList = ns2.AiWindow.sidebarBox
+assert(chatList.template == "WowScrollBoxList", "the chat list is a Blizzard ScrollBox list")
+local listTop = { chatList:GetPointByName("TOPLEFT") }
+assert(listTop[2] == newChat, "the chat list starts under the New chat button")
+
+local box = ns2.AiWindow.messageBox
+assert(box.template == "WowScrollBoxList", "the message list is a Blizzard ScrollBox list")
+assert(box.view.extentCalculator ~= nil, "bubble heights come from the view's element extent calculator")
+assert(box.view.elementExtent == nil, "bubbles have no fixed extent")
+local boxTopLeft = { box:GetPointByName("TOPLEFT") }
+local boxBottomRight = { box:GetPointByName("BOTTOMRIGHT") }
+assert(boxTopLeft[2] == sidebar and boxTopLeft[3] == "TOPRIGHT", "the message list starts right of the sidebar")
+assert(boxBottomRight[2] == reloaded.Inset, "the message list ends at the window inset")
+assert(boxTopLeft[4] > 0 and boxTopLeft[5] < 0, "the message list is padded from the sidebar and the top")
+assert(boxBottomRight[4] < 0 and boxBottomRight[5] > 0, "the message list is padded from the right and the bottom")
+
+local INSET_TOP = -24
 local TITLE_BOTTOM = -21
-
-local log = ns2.AiWindow.scrollFrame
-assert(log.justifyH == "LEFT", "the log is left-justified like a chat frame")
-assert(log.indentedWordWrap == true, "wrapped log lines hang-indent like a chat frame")
-local logTopLeft = { log:GetPointByName("TOPLEFT") }
-local logBottomRight = { log:GetPointByName("BOTTOMRIGHT") }
-assert(logTopLeft[2] == reloaded.Inset and logBottomRight[2] == reloaded.Inset, "the log is anchored inside the inset frame")
-assert(logTopLeft[4] > 0 and logTopLeft[5] < 0, "the log is padded from the inset's left and top edges")
-assert(logBottomRight[4] < 0 and logBottomRight[5] > 0, "the log is padded from the inset's right and bottom edges")
-
-local dropdownPoint, dropdownTo, _, dropdownX, dropdownY = ns2.AiWindow.dropdown:GetPointByName("TOPLEFT")
-assert(dropdownPoint == "TOPLEFT" and dropdownTo == reloaded, "the chats dropdown hangs from the window's top left")
-assert(dropdownX > 0 and dropdownX <= 12, "the dropdown sits at the left edge, not pushed right of a portrait")
-assert(dropdownY <= TITLE_BOTTOM and dropdownY > INSET_TOP, "the dropdown sits in the header band between the title bar and the inset")
 
 local gearPoint, gearTo, gearRelative, gearX, gearY = gear:GetPointByName("RIGHT")
 assert(gearPoint == "RIGHT" and gearTo == reloaded.CloseButton, "the gear is anchored to the close button")
@@ -100,13 +120,15 @@ local GRIP_SIZE = 16
 local CAP_OVERHANG = 5
 local MIN_GRIP_CLEARANCE = 4
 local _, _, _, insetBottomRightX, insetBottomOffset = reloaded.Inset:GetPointByName("BOTTOMRIGHT")
-assert(inputLeft[2] == reloaded.Inset and inputRight[2] == reloaded.Inset, "the input line is anchored to the inset, like the log")
-local inputBottomFromWindow = insetBottomOffset + inputLeft[5]
+assert(inputLeft[2] == sidebar and inputLeft[3] == "BOTTOMRIGHT", "the input line starts right of the sidebar")
+assert(inputRight[2] == reloaded.Inset, "the input line ends at the inset, like the message list")
+local sidebarBottomFromWindow = insetBottomOffset + sideBottomLeft[5]
+local inputBottomFromWindow = sidebarBottomFromWindow + inputLeft[5]
 assert(
   inputBottomFromWindow >= 0 and inputBottomFromWindow + input:GetHeight() <= insetBottomOffset,
   "the input line fits the strip below the inset"
 )
-assert(inputLeft[4] - CAP_OVERHANG == logTopLeft[4], "the input's visible left cap lines up with the log text")
+assert(inputLeft[4] - CAP_OVERHANG == boxTopLeft[4], "the input's visible left cap lines up with the message list")
 local gripPoint, _, _, gripX = grip:GetPointByName("BOTTOMRIGHT")
 assert(gripPoint == "BOTTOMRIGHT", "the resize grip sits at the window's bottom right")
 local gripLeftEdge = gripX - GRIP_SIZE
@@ -132,30 +154,57 @@ local function relativeLuminance(r, g, b)
   return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
 end
 local INSET_BRIGHTEST = { 24 / 255, 21 / 255, 24 / 255 }
-ns2.AiWindow.onProgress({ status = "thinking" })
-local thinking = ns2.AiWindow.scrollFrame.messages[#ns2.AiWindow.scrollFrame.messages]
+box:SetSize(500, 300)
+ns2.AiWindow.onProgress({ id = "ask-1", chat = "default", status = "thinking" })
+local entries = ns2.AiWindow.entries()
+local thinking = entries[#entries]
+assert(thinking.kind == "status", "the progress line is a status line, not a bubble")
+assert(thinking.display == "Claude \194\183 thinking\226\128\166", "the status line names the provider and says thinking")
+local statusRow = box:GetVisibleFrames()[#entries]
+assert(statusRow.bubble:IsShown() == false, "a status line draws no bubble")
 local grayR, grayG, grayB = GRAY_FONT_COLOR:GetRGB()
-assert(thinking.text == "[Claude] thinking", "the progress line is the thinking status")
-assert(thinking.r == grayR and thinking.g == grayG and thinking.b == grayB, "the status line uses Blizzard's GRAY_FONT_COLOR")
-local textLuminance = relativeLuminance(thinking.r, thinking.g, thinking.b)
+local lineColor = statusRow.line.textColor
+assert(lineColor.r == grayR and lineColor.g == grayG and lineColor.b == grayB, "the status line uses Blizzard's GRAY_FONT_COLOR")
+local textLuminance = relativeLuminance(lineColor.r, lineColor.g, lineColor.b)
 local backgroundLuminance = relativeLuminance(INSET_BRIGHTEST[1], INSET_BRIGHTEST[2], INSET_BRIGHTEST[3])
 assert((textLuminance + 0.05) / (backgroundLuminance + 0.05) >= 4.5, "the status line reads at 4.5:1 on the brightest inset sample")
 
-assert(log.fading == false, "the log never fades its lines out")
-assert(log.maxLines == 200, "the log keeps as many lines as the companion's per-chat history")
-assert(log.mouseWheelEnabled == true, "the log takes the mouse wheel")
-log.scrollLog = {}
-log:Fire("OnMouseWheel", 1)
-log:Fire("OnMouseWheel", -1)
-assert(log.scrollLog[1] == "up" and log.scrollLog[2] == "down", "the wheel scrolls the log one line up and down")
+assert(box.wheelLog ~= nil and box.scripts.OnMouseWheel ~= nil, "the message list takes the mouse wheel")
+box:Fire("OnMouseWheel", 1)
+box:Fire("OnMouseWheel", -1)
+assert(box.wheelLog[1] == 1 and box.wheelLog[2] == -1, "the wheel scrolls the list through the ScrollBox's own handler")
 _G.WOWC_TEST_SHIFT_DOWN = true
-log:Fire("OnMouseWheel", 1)
-log:Fire("OnMouseWheel", -1)
+box:Fire("OnMouseWheel", 1)
+box:Fire("OnMouseWheel", -1)
 _G.WOWC_TEST_SHIFT_DOWN = false
-assert(log.scrollLog[3] == "pageup" and log.scrollLog[4] == "pagedown", "shift with the wheel pages the log")
+assert(#box.wheelLog == 2, "shift with the wheel does not use the single-step handler")
+assert(box.pageLog[1].direction == ScrollControllerMixin.Directions.Decrease, "shift and wheel up pages up")
+assert(box.pageLog[2].direction == ScrollControllerMixin.Directions.Increase, "shift and wheel down pages down")
+assert(box.pageLog[1].percentage == box:GetVisibleExtentPercentage(), "a page is one visible extent")
 
-ns2.AiWindow.openMoreBox("full reply text")
-local more = ns2.AiWindow.moreBox
+local narrow = {}
+narrow.Transport = { sent = {} }
+function narrow.Transport.send() end
+WoWCompanionDB.window = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 300, height = 100 }
+assert(loadfile("addon/WoWCompanion/AiWindow.lua"))("WoWCompanion", narrow)
+local clamped = narrow.AiWindow.create()
+assert(clamped:GetWidth() == 480 and clamped:GetHeight() == 240, "a saved size below the new bounds is clamped up to them")
+WoWCompanionDB.window = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0, width = 5000, height = 5000 }
+local wide = {}
+wide.Transport = { sent = {} }
+function wide.Transport.send() end
+assert(loadfile("addon/WoWCompanion/AiWindow.lua"))("WoWCompanion", wide)
+local clampedWide = wide.AiWindow.create()
+assert(clampedWide:GetWidth() == 1100 and clampedWide:GetHeight() == 800, "a saved size above the bounds is clamped down")
+local fresh = {}
+fresh.Transport = { sent = {} }
+function fresh.Transport.send() end
+WoWCompanionDB.window = nil
+assert(loadfile("addon/WoWCompanion/AiWindow.lua"))("WoWCompanion", fresh)
+assert(fresh.AiWindow.create():GetWidth() == 680, "the default window is about 680 px wide")
+
+ns2.AiWindow.openCopyBox("full reply text")
+local more = ns2.AiWindow.copyBox
 assert(more.portraitShown == false, "the full-reply box hides the empty portrait ring too")
 assert(more.border == "ButtonFrameTemplateNoPortrait", "the full-reply box uses the portrait-less border layout")
 

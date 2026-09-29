@@ -77,19 +77,23 @@ export function codexArgs(input: {
   mcpCommand: string;
   mcpArgs: string[];
   mcpEnv: Record<string, string>;
+  noMcp?: boolean;
 }): string[] {
-  const mcpOverrides = [
-    "-c",
-    `mcp_servers.wowc.command=${JSON.stringify(input.mcpCommand)}`,
-    "-c",
-    `mcp_servers.wowc.args=${JSON.stringify(input.mcpArgs)}`,
-    "-c",
-    `mcp_servers.wowc.default_tools_approval_mode=${JSON.stringify("approve")}`,
-    ...Object.entries(input.mcpEnv).flatMap(([key, value]) => [
-      "-c",
-      `mcp_servers.wowc.env.${key}=${JSON.stringify(value)}`,
-    ]),
-  ];
+  const mcpOverrides =
+    input.noMcp === true
+      ? []
+      : [
+          "-c",
+          `mcp_servers.wowc.command=${JSON.stringify(input.mcpCommand)}`,
+          "-c",
+          `mcp_servers.wowc.args=${JSON.stringify(input.mcpArgs)}`,
+          "-c",
+          `mcp_servers.wowc.default_tools_approval_mode=${JSON.stringify("approve")}`,
+          ...Object.entries(input.mcpEnv).flatMap(([key, value]) => [
+            "-c",
+            `mcp_servers.wowc.env.${key}=${JSON.stringify(value)}`,
+          ]),
+        ];
   const isolation = [
     "--ignore-user-config",
     "--skip-git-repo-check",
@@ -98,10 +102,12 @@ export function codexArgs(input: {
   const effortOverride = input.effort
     ? ["-c", `model_reasoning_effort=${JSON.stringify(input.effort)}`]
     : [];
+  const noWeb = ["-c", `web_search=${JSON.stringify("disabled")}`];
   const execOptions = [
     "-s",
     "read-only",
     ...isolation,
+    ...noWeb,
     "--model",
     input.model,
     ...effortOverride,
@@ -155,10 +161,11 @@ export function createCodexWith(run: RunFn, checkInstalled: CheckInstalledFn): C
           return { ok: false, error: "provider_disabled" };
         }
         let workDir: string;
+        const noTools = input.tools === "none";
         let launch: McpLaunch;
         try {
           workDir = safeRunDir(config.cwd, "codex-runs", input.runId);
-          launch = config.mcp(input.runId);
+          launch = noTools ? { command: "", args: [], env: {} } : config.mcp(input.runId);
         } catch {
           return { ok: false, error: "provider_failed" };
         }
@@ -183,6 +190,7 @@ export function createCodexWith(run: RunFn, checkInstalled: CheckInstalledFn): C
             mcpCommand: launch.command,
             mcpArgs: launch.args,
             mcpEnv: launch.env,
+            ...(noTools ? { noMcp: true } : {}),
           });
           const resumed = input.sessionId !== undefined;
           const outcome = await run("codex", args, {

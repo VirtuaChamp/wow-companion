@@ -21,12 +21,18 @@ export function commit(ctx: DaemonContext, outcome: ChatsOutcome): void {
   if (outcome.state.activeId !== previousActive) sendOptions(ctx);
 }
 
-export function reportChatsError(ctx: DaemonContext, error: ChatsError, askId?: string): void {
+export function reportChatsError(
+  ctx: DaemonContext,
+  error: ChatsError,
+  askId?: string,
+  chatId?: string,
+): void {
   switch (error) {
     case "busy":
       ctx.out.send({
         t: "error",
         ...(askId === undefined ? {} : { id: askId }),
+        ...(chatId === undefined ? {} : { chat: chatId }),
         code: "busy",
         message: chatsErrorMessage(error),
       });

@@ -176,4 +176,24 @@ describe("daemon.runner", () => {
     expect(seen[1] && "effort" in seen[1]).toBe(false);
     expect(seen[1] && "sessionId" in seen[1]).toBe(false);
   });
+
+  it("passes tools none through to the provider and omits it by default", async () => {
+    const seen: RunInput[] = [];
+    const runner = createRunner({
+      providers: new Map([
+        [
+          "claude",
+          fakeProvider("claude", async (input) => {
+            seen.push(input);
+            return { ok: true, value: { sessionId: "s", text: "t" } };
+          }),
+        ],
+      ]),
+      timeoutMs: 1000,
+    });
+    await runner.run({ ...request("a1"), tools: "none" }, () => {});
+    await runner.run(request("a2"), () => {});
+    expect(seen[0]?.tools).toBe("none");
+    expect(seen[1] && "tools" in seen[1]).toBe(false);
+  });
 });
