@@ -14,10 +14,7 @@ local MAX_SEEN_REPLY_IDS = 200
 local ASK_ID_SESSION_MAX = 40
 local MORE_BOX_WIDTH = 460
 local MORE_BOX_HEIGHT = 360
-local MORE_BOX_MARGIN_LEFT = 12
-local MORE_BOX_MARGIN_RIGHT = 30
-local MORE_BOX_MARGIN_TOP = 70
-local MORE_BOX_MARGIN_BOTTOM = 40
+local MORE_BOX_PADDING = 10
 local MORE_BOX_SCROLLBAR_ALLOWANCE = 18
 local MORE_BOX_LINE_PADDING = 4
 local RESIZE_MIN_WIDTH = 280
@@ -28,6 +25,21 @@ local POPUP_PADDING = 6
 local POPUP_ICON_SIZE = 12
 local QUEST_ICON_ATLAS = "QuestNormal"
 local GEAR_ICON_ATLAS = "questlog-icon-setting"
+local GEAR_GAP_FROM_CLOSE = 6
+local GEAR_HIT_INSET = 4
+local DROPDOWN_LEFT = 12
+local DROPDOWN_TOP = -30
+local LOG_PADDING_X = 8
+local LOG_PADDING_Y = 6
+local LOG_MAX_LINES = 200
+local INPUT_STRIP_HEIGHT = 26
+local INPUT_BOTTOM = 5
+local INPUT_HEIGHT = 20
+local INPUT_CAP_OVERHANG = 5
+local INPUT_TEXT_INSET = 10
+local GRIP_SIZE = 16
+local GRIP_MARGIN = 6
+local GRIP_CLEARANCE = 4
 
 local frame
 local scrollFrame
@@ -612,9 +624,21 @@ function AiWindow.onError(msg)
   greyLine(line)
 end
 
+local function layoutMoreBoxText()
+  local scroll = moreBox.scrollFrame
+  local textWidth = scroll:GetWidth() - MORE_BOX_SCROLLBAR_ALLOWANCE
+  moreBox.editBox:SetWidth(textWidth)
+  moreBox.measure:SetWidth(textWidth)
+  local textHeight = math.ceil(moreBox.measure:GetStringHeight()) + MORE_BOX_LINE_PADDING
+  moreBox.editBox:SetHeight(math.max(scroll:GetHeight(), textHeight))
+end
+
 function AiWindow.openMoreBox(fullText)
   if not moreBox then
     moreBox = CreateFrame("Frame", "WoWCompanionMoreBox", UIParent, "ButtonFrameTemplate")
+    ButtonFrameTemplate_HideAttic(moreBox)
+    ButtonFrameTemplate_HideButtonBar(moreBox)
+    ButtonFrameTemplate_HidePortrait(moreBox)
     moreBox:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     moreBox:SetSize(MORE_BOX_WIDTH, MORE_BOX_HEIGHT)
     moreBox:SetFrameStrata("DIALOG")
@@ -622,17 +646,13 @@ function AiWindow.openMoreBox(fullText)
       moreBox.TitleContainer.TitleText:SetText("Claude \226\128\148 full reply")
     end
     local scroll = CreateFrame("ScrollFrame", "WoWCompanionMoreBoxScroll", moreBox, "InputScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", moreBox, "TOPLEFT", MORE_BOX_MARGIN_LEFT, -MORE_BOX_MARGIN_TOP)
-    local viewportWidth = MORE_BOX_WIDTH - MORE_BOX_MARGIN_LEFT - MORE_BOX_MARGIN_RIGHT
-    local viewportHeight = MORE_BOX_HEIGHT - MORE_BOX_MARGIN_TOP - MORE_BOX_MARGIN_BOTTOM
-    scroll:SetSize(viewportWidth, viewportHeight)
+    scroll:SetPoint("TOPLEFT", moreBox.Inset, "TOPLEFT", MORE_BOX_PADDING, -MORE_BOX_PADDING)
+    scroll:SetPoint("BOTTOMRIGHT", moreBox.Inset, "BOTTOMRIGHT", -MORE_BOX_PADDING, MORE_BOX_PADDING)
     scroll.CharCount:Hide()
     local editBox = scroll.EditBox
     editBox:SetMultiLine(true)
     editBox:SetAutoFocus(true)
-    editBox:SetWidth(scroll:GetWidth() - MORE_BOX_SCROLLBAR_ALLOWANCE)
     moreBox.measure = moreBox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    moreBox.measure:SetWidth(editBox:GetWidth())
     moreBox.measure:Hide()
     editBox:HookScript("OnTextChanged", function(box, isUserInput)
       if isUserInput then
@@ -642,15 +662,15 @@ function AiWindow.openMoreBox(fullText)
     end)
     moreBox.editBox = editBox
     moreBox.scrollFrame = scroll
+    scroll:HookScript("OnSizeChanged", layoutMoreBoxText)
   end
   moreBoxText = sanitize(fullText)
+  moreBox:Show()
   moreBox.measure:SetText(moreBoxText)
-  local textHeight = math.ceil(moreBox.measure:GetStringHeight()) + MORE_BOX_LINE_PADDING
-  moreBox.editBox:SetHeight(math.max(moreBox.scrollFrame:GetHeight(), textHeight))
+  layoutMoreBoxText()
   moreBox.editBox:SetText(moreBoxText)
   moreBox.editBox:HighlightText()
   moreBox.editBox:SetFocus()
-  moreBox:Show()
   AiWindow.moreBox = moreBox
   AiWindow.moreBoxEditBox = moreBox.editBox
 end
@@ -689,11 +709,34 @@ EventRegistry:RegisterCallback("SetItemRef", function(_, link)
   AiWindow.handleAddonLink(link)
 end, AiWindow)
 
+function AiWindow.onLogWheel(log, delta)
+  local pageMode = IsShiftKeyDown()
+  if delta > 0 then
+    if pageMode then
+      log:PageUp()
+    else
+      log:ScrollUp()
+    end
+  elseif delta < 0 then
+    if pageMode then
+      log:PageDown()
+    else
+      log:ScrollDown()
+    end
+  end
+end
+
 local function buildScrollFrame(parent)
   scrollFrame = CreateFrame("ScrollingMessageFrame", "WoWCompanionAiWindowScroll", parent)
-  scrollFrame:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, -60)
-  scrollFrame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -28, 44)
+  scrollFrame:SetPoint("TOPLEFT", parent.Inset, "TOPLEFT", LOG_PADDING_X, -LOG_PADDING_Y)
+  scrollFrame:SetPoint("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -LOG_PADDING_X, LOG_PADDING_Y)
   scrollFrame:SetFontObject(GameFontHighlightSmall)
+  scrollFrame:SetIndentedWordWrap(true)
+  scrollFrame:SetJustifyH("LEFT")
+  scrollFrame:SetFading(false)
+  scrollFrame:SetMaxLines(LOG_MAX_LINES)
+  scrollFrame:EnableMouseWheel(true)
+  scrollFrame:SetScript("OnMouseWheel", AiWindow.onLogWheel)
   scrollFrame:SetHyperlinksEnabled(true)
   scrollFrame:SetScript("OnHyperlinkClick", function(_, link, text, button)
     SetItemRef(link, text, button, scrollFrame)
@@ -760,9 +803,11 @@ end
 local function buildInputBox(parent)
   inputBox = CreateFrame("EditBox", "WoWCompanionAiWindowInput", parent, "InputBoxTemplate")
   inputBox:SetAutoFocus(false)
-  inputBox:SetHeight(20)
-  inputBox:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", 12, 12)
-  inputBox:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -12, 12)
+  inputBox:SetHeight(INPUT_HEIGHT)
+  local belowInset = INPUT_BOTTOM - INPUT_STRIP_HEIGHT
+  inputBox:SetPoint("BOTTOMLEFT", parent.Inset, "BOTTOMLEFT", LOG_PADDING_X + INPUT_CAP_OVERHANG, belowInset)
+  inputBox:SetPoint("BOTTOMRIGHT", parent.Inset, "BOTTOMRIGHT", -(GRIP_SIZE + GRIP_CLEARANCE), belowInset)
+  inputBox:SetTextInsets(INPUT_TEXT_INSET, INPUT_TEXT_INSET, 0, 0)
   inputBox:SetScript("OnEnterPressed", AiWindow.onInputEnter)
   inputBox:SetScript("OnTabPressed", AiWindow.onInputTab)
   inputBox:SetScript("OnEscapePressed", AiWindow.onInputEscape)
@@ -804,14 +849,16 @@ end
 
 local function buildDropdown(parent)
   dropdown = CreateFrame("DropdownButton", "WoWCompanionAiWindowChats", parent, "WowStyle1DropdownTemplate")
-  dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", 12, -30)
+  dropdown:SetPoint("TOPLEFT", parent, "TOPLEFT", DROPDOWN_LEFT, DROPDOWN_TOP)
   AiWindow.dropdown = dropdown
 end
 
 local function buildGearButton(parent)
   local gearButton = CreateFrame("Button", "WoWCompanionAiWindowGear", parent)
   gearButton:SetSize(15, 16)
-  gearButton:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -28, -6)
+  gearButton:SetPoint("RIGHT", parent.CloseButton, "LEFT", -GEAR_GAP_FROM_CLOSE, 0)
+  gearButton:SetFrameLevel(parent.CloseButton:GetFrameLevel())
+  gearButton:SetHitRectInsets(-GEAR_HIT_INSET, -GEAR_HIT_INSET, -GEAR_HIT_INSET, -GEAR_HIT_INSET)
   gearButton:SetNormalAtlas(GEAR_ICON_ATLAS)
   gearButton:SetHighlightAtlas(GEAR_ICON_ATLAS, "ADD")
   gearButton:SetScript("OnClick", function()
@@ -832,7 +879,7 @@ end
 
 local function buildResizeGrip(parent)
   resizeGrip = CreateFrame("Button", "WoWCompanionAiWindowResizeGrip", parent, "PanelResizeButtonTemplate")
-  resizeGrip:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -6, 6)
+  resizeGrip:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -GRIP_MARGIN, GRIP_MARGIN)
   resizeGrip:Init(parent, RESIZE_MIN_WIDTH, RESIZE_MIN_HEIGHT, RESIZE_MAX_WIDTH, RESIZE_MAX_HEIGHT)
   resizeGrip:SetOnResizeStoppedCallback(saveGeometry)
   AiWindow.resizeGrip = resizeGrip
@@ -846,6 +893,7 @@ function AiWindow.create()
   WoWCompanionDB = WoWCompanionDB or {}
 
   frame = CreateFrame("Frame", "WoWCompanionClaudeWindow", UIParent, "ButtonFrameTemplate")
+  ButtonFrameTemplate_HidePortrait(frame)
   frame:SetMovable(true)
   frame:SetResizable(true)
   frame:SetClampedToScreen(true)

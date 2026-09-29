@@ -1,5 +1,9 @@
 return {
   "CreateFrame",
+  "ButtonFrameTemplate_HidePortrait",
+  "ButtonFrameTemplate_HideAttic",
+  "ButtonFrameTemplate_HideButtonBar",
+  "IsShiftKeyDown",
   "UIParent",
   "SlashCmdList",
   "LinkUtil",

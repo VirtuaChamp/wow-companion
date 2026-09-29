@@ -66,4 +66,31 @@ assert(
   "the edit box grows past the viewport for a long reply, so the scroll frame has content to scroll"
 )
 
+local moreBox = ns.AiWindow.moreBox
+local SCROLLBAR_ALLOWANCE = 18
+local _, _, _, insetLeft, insetTop = moreBox.Inset:GetPointByName("TOPLEFT")
+local _, _, _, _, insetBottom = moreBox.Inset:GetPointByName("BOTTOMRIGHT")
+assert(insetTop == -24, "the full-reply box hides the header attic: the inset starts right under the title bar")
+assert(insetBottom == 4, "the full-reply box hides the empty button bar: the inset reaches the bottom border")
+assert(insetLeft == 9, "the full-reply box keeps the portrait-less inset offset after the attic is hidden")
+local scrollTopLeft = { scroll:GetPointByName("TOPLEFT") }
+local scrollBottomRight = { scroll:GetPointByName("BOTTOMRIGHT") }
+assert(scrollTopLeft[2] == moreBox.Inset and scrollBottomRight[2] == moreBox.Inset, "the scroll frame is anchored to the inset")
+assert(
+  scrollTopLeft[4] > 0 and scrollTopLeft[4] == -scrollTopLeft[5],
+  "the scroll frame's top and left padding are equal"
+)
+assert(
+  scrollBottomRight[4] == -scrollTopLeft[4] and scrollBottomRight[5] == scrollTopLeft[4],
+  "the scroll frame's right and bottom padding equal its top and left"
+)
+assert(scroll:GetWidth() == moreBox:GetWidth() - 9 - 6 - 2 * scrollTopLeft[4], "the scroll width is what the anchors lay out")
+assert(box:GetWidth() == scroll:GetWidth() - SCROLLBAR_ALLOWANCE, "the text width comes from the laid-out scroll frame")
+assert(moreBox.measure:GetWidth() == box:GetWidth(), "the height measure wraps at the same width as the edit box")
+
+moreBox:SetSize(600, 400)
+scroll:Fire("OnSizeChanged")
+assert(box:GetWidth() == scroll:GetWidth() - SCROLLBAR_ALLOWANCE, "resizing the box re-lays the text out at the new width")
+assert(scroll:GetWidth() == 600 - 9 - 6 - 2 * scrollTopLeft[4], "the resized scroll frame follows its anchors")
+
 print("more.link: all assertions passed")
