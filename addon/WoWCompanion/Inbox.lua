@@ -41,8 +41,37 @@ local function slotAddonName(index)
   return ("WoWCompanion_R%03d"):format(index)
 end
 
+local SIGNAL_DIR = "Interface\\AddOns\\WoWCompanion_Signals\\sig\\"
+local CONTROL_PRESENT_PATH = SIGNAL_DIR .. "ctl-present.wav"
+local CONTROL_GONE_PATH = SIGNAL_DIR .. "ctl-gone.wav"
+local signalsTrusted = false
+local controlWarned = false
+
 local function slotSignalPath(index)
-  return ("Interface\\AddOns\\WoWCompanion_Signals\\sig\\%03d.wav"):format(index)
+  return ("%s%03d.wav"):format(SIGNAL_DIR, index)
+end
+
+local function signalPresent(path)
+  local present, handle = PlaySoundFile(path)
+  if not present then
+    return false
+  end
+  if handle then
+    StopSound(handle)
+  end
+  return true
+end
+
+local function checkSignalsTrusted()
+  if not signalPresent(CONTROL_PRESENT_PATH) then
+    signalsTrusted = false
+    if not controlWarned then
+      controlWarned = true
+      print("WoW Companion: reply signals not working on this client, restart the game after setup")
+    end
+    return
+  end
+  signalsTrusted = not signalPresent(CONTROL_GONE_PATH)
 end
 
 local function slotsLeft()
@@ -134,6 +163,7 @@ local function tryAck(seq)
     startCurrent(nextEntry)
   end
   if wasHello then
+    checkSignalsTrusted()
     for i = 1, #helloAckedHandlers do
       local ok, err = pcall(helloAckedHandlers[i])
       if not ok then
@@ -144,7 +174,7 @@ local function tryAck(seq)
 end
 
 function WoWCompanion_Deliver(deliverySession, msgs)
-  if deliverySession ~= session then
+  if deliverySession == nil or deliverySession ~= session or type(msgs) ~= "table" then
     return
   end
   for i = 1, #msgs do
@@ -333,8 +363,8 @@ local function pollNextSlot()
       exhausted = true
       print("WoW Companion: reply slots exhausted, type /reload to continue")
     else
-      local ready = PlaySoundFile(slotSignalPath(nextSlotIndex))
-      if ready then
+      checkSignalsTrusted()
+      if signalsTrusted and not signalPresent(slotSignalPath(nextSlotIndex)) then
         local name = slotAddonName(nextSlotIndex)
         C_AddOns.EnableAddOn(name)
         local loaded, reason = C_AddOns.LoadAddOn(name)
@@ -363,6 +393,8 @@ do
     print("WoW Companion: failed to encode hello: " .. tostring(err))
   end
 end
+
+checkSignalsTrusted()
 
 C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
 C_Timer.After(REPAINT_INTERVAL_SECONDS, pollNextSlot)

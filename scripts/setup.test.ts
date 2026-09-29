@@ -38,13 +38,48 @@ describe("scripts/setup.ts", () => {
     expect(existsSync(join(result.addonsRoot, "WoWCompanion_R201"))).toBe(false);
 
     const sigFiles = readdirSync(join(result.signalsRoot, "sig"));
-    expect(sigFiles).toHaveLength(200);
+    expect(sigFiles).toHaveLength(202);
     expect(sigFiles).toContain("001.wav");
     expect(sigFiles).toContain("200.wav");
+    expect(sigFiles).toContain("ctl-present.wav");
+    expect(sigFiles).toContain("ctl-gone.wav");
+    for (let index = 1; index <= 200; index += 1) {
+      expect(sigFiles).toContain(`${String(index).padStart(3, "0")}.wav`);
+    }
     const sig001 = readFileSync(join(result.signalsRoot, "sig", "001.wav"));
     expect(sig001.length).toBe(0);
 
     expect(existsSync(join(result.signalsRoot, "alive"))).toBe(false);
+  });
+
+  it("writes every r.lua placeholder as a deliver call with a nil session, never an empty file", () => {
+    const wowPath = makeTempDir("wowc-wowpath-placeholder-");
+    const repoAddonDir = join(import.meta.dirname, "..", "addon", "WoWCompanion");
+
+    const result = runSetup({ wowPath, repoAddonDir, slotCount: 3 });
+
+    for (const name of ["WoWCompanion_R001", "WoWCompanion_R002", "WoWCompanion_R003"]) {
+      expect(readFileSync(join(result.addonsRoot, name, "r.lua"), "utf-8")).toBe(
+        "WoWCompanion_Deliver(nil, nil)",
+      );
+    }
+  });
+
+  it("creates the two self-test signal files, empty, next to the slot signals", () => {
+    const wowPath = makeTempDir("wowc-wowpath-ctl-");
+    const repoAddonDir = join(import.meta.dirname, "..", "addon", "WoWCompanion");
+
+    const result = runSetup({ wowPath, repoAddonDir, slotCount: 2 });
+
+    const sigDir = join(result.signalsRoot, "sig");
+    expect(readdirSync(sigDir).sort()).toEqual([
+      "001.wav",
+      "002.wav",
+      "ctl-gone.wav",
+      "ctl-present.wav",
+    ]);
+    expect(readFileSync(join(sigDir, "ctl-present.wav")).length).toBe(0);
+    expect(readFileSync(join(sigDir, "ctl-gone.wav")).length).toBe(0);
   });
 
   it("writes only under the given wowPath, never a real game install", () => {

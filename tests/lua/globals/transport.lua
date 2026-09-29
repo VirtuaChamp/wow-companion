@@ -3,6 +3,7 @@ return {
   "UIParent",
   "GetPhysicalScreenSize",
   "PlaySoundFile",
+  "StopSound",
   "C_AddOns",
   "C_Timer",
   "time",

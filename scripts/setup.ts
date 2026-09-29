@@ -10,6 +10,8 @@ import { join } from "node:path";
 
 const SLOT_COUNT = 200;
 const EMPTY_WAV = new Uint8Array(0);
+const SLOT_PLACEHOLDER = "WoWCompanion_Deliver(nil, nil)";
+const CONTROL_SIGNAL_FILES = ["ctl-present.wav", "ctl-gone.wav"];
 
 function slotAddonName(index: number): string {
   return `WoWCompanion_R${String(index + 1).padStart(3, "0")}`;
@@ -50,7 +52,7 @@ function writeSlotAddon(addonsRoot: string, index: number): void {
   const dir = join(addonsRoot, name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.toc`), slotToc());
-  writeFileSync(join(dir, "r.lua"), "");
+  writeFileSync(join(dir, "r.lua"), SLOT_PLACEHOLDER);
 }
 
 export function runSetup(options: SetupOptions): SetupResult {
@@ -66,6 +68,10 @@ export function runSetup(options: SetupOptions): SetupResult {
   for (let i = 0; i < slotCount; i += 1) {
     writeSlotAddon(addonsRoot, i);
     writeFileSync(join(sigDir, slotSignalFileName(i)), EMPTY_WAV);
+  }
+
+  for (const name of CONTROL_SIGNAL_FILES) {
+    writeFileSync(join(sigDir, name), EMPTY_WAV);
   }
 
   return { addonsRoot, addonDir, signalsRoot, slotsCreated: slotCount };
@@ -89,6 +95,9 @@ function main(): void {
   console.log(`installed WoWCompanion into ${result.addonDir}`);
   console.log(`generated ${result.slotsCreated} reply slots under ${result.addonsRoot}`);
   console.log(`signal files under ${result.signalsRoot}`);
+  console.log(
+    "restart the game client now: it only sees signal files that existed when it launched",
+  );
 }
 
 if (import.meta.main) {

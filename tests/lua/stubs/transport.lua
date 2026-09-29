@@ -1,20 +1,26 @@
-local signalContents = {}
-local playedOnce = {}
+local absentSignals = {}
+local nextSoundHandle = 100
 
-_G.WOWC_TEST_SET_SIGNAL = function(path, content)
-  signalContents[path] = content
+_G.WOWC_TEST_ISSUED_SOUND_HANDLES = {}
+_G.WOWC_TEST_STOPPED_SOUND_HANDLES = {}
+_G.WOWC_TEST_SIGNAL_PROBES = {}
+
+_G.WOWC_TEST_SET_SIGNAL_PRESENT = function(path, present)
+  absentSignals[path] = (not present) or nil
 end
 
 _G.PlaySoundFile = function(path)
-  if playedOnce[path] then
-    return true
+  _G.WOWC_TEST_SIGNAL_PROBES[path] = (_G.WOWC_TEST_SIGNAL_PROBES[path] or 0) + 1
+  if absentSignals[path] then
+    return
   end
-  local content = signalContents[path]
-  if content == nil or content == "" then
-    return false
-  end
-  playedOnce[path] = true
-  return true
+  nextSoundHandle = nextSoundHandle + 1
+  table.insert(_G.WOWC_TEST_ISSUED_SOUND_HANDLES, nextSoundHandle)
+  return true, nextSoundHandle
+end
+
+_G.StopSound = function(handle)
+  table.insert(_G.WOWC_TEST_STOPPED_SOUND_HANDLES, handle)
 end
 
 _G.C_AddOns = _G.C_AddOns or {}

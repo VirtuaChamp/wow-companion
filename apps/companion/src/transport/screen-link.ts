@@ -9,7 +9,13 @@ import type { FrameBuffer } from "./codec.ts";
 import { decodeGrid, reassemble } from "./codec.ts";
 import type { FrameSource } from "./capture.ts";
 import { GRID_SYNC_PATTERN_CELLS, syncRowCell } from "./grid.ts";
-import { SLOT_COUNT, createSlotAllocator, messageByteSize, writeSlot } from "./slots.ts";
+import {
+  SLOT_COUNT,
+  controlGoneFile,
+  createSlotAllocator,
+  messageByteSize,
+  writeSlot,
+} from "./slots.ts";
 import type { SlotAllocator, SlotFs, SlotPaths } from "./slots.ts";
 
 type Waiter = (result: IteratorResult<GameToCompanion>) => void;
@@ -80,7 +86,6 @@ export type ScreenLinkConfig = {
   frameSource: FrameSource;
   fs: SlotFs;
   paths: SlotPaths;
-  validWav: Uint8Array;
   emptyWav: Uint8Array;
   slotCount?: number;
   pollIntervalMs?: number;
@@ -146,6 +151,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   let exhaustedUntilResync = false;
   let flushing: Promise<void> | undefined;
   let closed = false;
+  let controlCleared = false;
 
   function sizingSession(): string {
     return session.length >= SESSION_LENGTH ? session : "x".repeat(SESSION_LENGTH);
@@ -183,14 +189,14 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   async function firstFreeSlotFrom(startIndex: number): Promise<number | undefined> {
     let index = startIndex;
     while (index < slotCount) {
-      let signal: Uint8Array | undefined;
+      let present: boolean;
       try {
-        signal = await config.fs.readFile(config.paths.signalFile(index));
+        present = await config.fs.exists(config.paths.signalFile(index));
       } catch (error) {
         config.onCaptureError?.(error);
         return undefined;
       }
-      if (signal === undefined || signal.length === 0) {
+      if (present) {
         return index;
       }
       index += 1;
@@ -215,6 +221,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       pending.length === 0 ||
       closed ||
       !helloSeen ||
+      !controlCleared ||
       resyncing ||
       exhaustedUntilResync
     ) {
@@ -249,7 +256,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     }
     let result;
     try {
-      result = await writeSlot(config.fs, config.paths, allocator, session, batch, config.validWav);
+      result = await writeSlot(config.fs, config.paths, allocator, session, batch);
     } catch (error) {
       pending.unshift(...batch);
       config.onCaptureError?.(error);
@@ -414,6 +421,22 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     queue.push(msg);
   }
 
+  async function clearControlGone(): Promise<void> {
+    const file = controlGoneFile(config.paths);
+    while (!closed) {
+      try {
+        await config.fs.remove(file);
+        controlCleared = true;
+        return;
+      } catch (error) {
+        config.onCaptureError?.(error);
+        await delay(slotReadMs);
+      }
+    }
+  }
+
+  const startup = clearControlGone().then(() => scheduleFlush());
+
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   function scheduleNextPoll(): void {
     if (closed) {
@@ -467,6 +490,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       config.frameSource.close();
     },
     async idle(): Promise<void> {
+      await startup;
       while (
         flushing !== undefined ||
         (pending.length > 0 && helloSeen && !exhaustedUntilResync && !resyncing)

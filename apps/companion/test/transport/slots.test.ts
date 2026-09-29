@@ -9,7 +9,8 @@ import {
   encodeSlotContent,
   writeSlot,
 } from "../../src/transport/slots.ts";
-import type { SlotFs, SlotPaths } from "../../src/transport/slots.ts";
+import type { SlotPaths } from "../../src/transport/slots.ts";
+import { makeMemoryFs } from "./memory-fs.ts";
 import type { CompanionToGame } from "@wow-companion/contracts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
@@ -75,17 +76,6 @@ function runDeliverChunk(content: string): { session: unknown; msgs: unknown } {
   return JSON.parse(result.stdout) as { session: unknown; msgs: unknown };
 }
 
-function makeMemoryFs(writes: { path: string; data: string | Uint8Array }[]): SlotFs {
-  return {
-    async writeFile(path: string, data: string | Uint8Array): Promise<void> {
-      writes.push({ path, data });
-    },
-    async readFile(): Promise<Uint8Array | undefined> {
-      return undefined;
-    },
-  };
-}
-
 const paths: SlotPaths = {
   addonDeliverFile: (i) => `addons/WoWCompanion_R${i}/r.lua`,
   signalFile: (i) => `sig/${i}.wav`,
@@ -97,7 +87,7 @@ describe("slots.write", () => {
     const fs = makeMemoryFs(writes);
     const allocator = createSlotAllocator(200);
     const msgs: CompanionToGame[] = [{ t: "ack", seq: 7 }];
-    const result = await writeSlot(fs, paths, allocator, "sess-1", msgs, new Uint8Array([1, 2, 3]));
+    const result = await writeSlot(fs, paths, allocator, "sess-1", msgs);
     expect(result.ok).toBe(true);
     const written = writes.find((w) => w.path.includes("r.lua"));
     expect(written).toBeDefined();
@@ -116,7 +106,7 @@ describe("slots.write", () => {
     const msgs: CompanionToGame[] = [
       { t: "reply", id: "x", chat: "c", provider: "claude", summary: tricky, full: tricky },
     ];
-    const result = await writeSlot(fs, paths, allocator, "sess-1", msgs, new Uint8Array([1]));
+    const result = await writeSlot(fs, paths, allocator, "sess-1", msgs);
     expect(result.ok).toBe(true);
     const content = writes.find((w) => w.path.includes("r.lua"))?.data as string;
     const check = loadstringChecks(content);
@@ -138,7 +128,7 @@ describe("slots.write", () => {
       { t: "chats", active: "c1", list: [] },
       { t: "ack", seq: 42 },
     ];
-    const result = await writeSlot(fs, paths, allocator, "sess-exec", msgs, new Uint8Array([1]));
+    const result = await writeSlot(fs, paths, allocator, "sess-exec", msgs);
     expect(result.ok).toBe(true);
     const content = writes.find((w) => w.path.includes("r.lua"))?.data as string;
 
@@ -147,15 +137,41 @@ describe("slots.write", () => {
     expect(delivered.msgs).toEqual(msgs);
   });
 
-  it("writes the addon file before the signal file", async () => {
+  it("writes r.lua to a temp file, renames it over r.lua, and only then deletes the signal file", async () => {
     const writes: { path: string; data: string | Uint8Array }[] = [];
     const fs = makeMemoryFs(writes);
     const allocator = createSlotAllocator(200);
-    await writeSlot(fs, paths, allocator, "sess-1", [{ t: "ack", seq: 1 }], new Uint8Array([9]));
-    const addonIndex = writes.findIndex((w) => w.path.includes("r.lua"));
-    const sigIndex = writes.findIndex((w) => w.path.includes("sig/"));
-    expect(addonIndex).toBeGreaterThanOrEqual(0);
-    expect(sigIndex).toBeGreaterThan(addonIndex);
+    await writeSlot(fs, paths, allocator, "sess-1", [{ t: "ack", seq: 1 }]);
+    expect(fs.ops).toEqual([
+      "write addons/WoWCompanion_R0/r.lua.tmp",
+      "rename addons/WoWCompanion_R0/r.lua.tmp addons/WoWCompanion_R0/r.lua",
+      "remove sig/0.wav",
+    ]);
+    expect(fs.files.has("addons/WoWCompanion_R0/r.lua.tmp")).toBe(false);
+    expect(fs.files.has("sig/0.wav")).toBe(false);
+    expect(fs.files.has("sig/1.wav")).toBe(true);
+  });
+
+  it("does not delete the signal file when the write or the rename failed, and does not advance the allocator", async () => {
+    for (const failing of ["write", "rename"] as const) {
+      const fs = makeMemoryFs([], {
+        hooks: {
+          beforeWrite() {
+            if (failing === "write") throw new Error("EBUSY");
+          },
+          beforeRename() {
+            if (failing === "rename") throw new Error("EPERM");
+          },
+        },
+      });
+      const allocator = createSlotAllocator(200);
+      await expect(
+        writeSlot(fs, paths, allocator, "sess-1", [{ t: "ack", seq: 1 }]),
+      ).rejects.toThrow();
+      expect(fs.removed).toEqual([]);
+      expect(fs.files.has("sig/0.wav")).toBe(true);
+      expect(allocator.position()).toBe(0);
+    }
   });
 
   it("a reply message alone over 64 KB yields too_large, not truncated", () => {
@@ -177,25 +193,11 @@ describe("slots.exhausted", () => {
     const allocator = createSlotAllocator(200);
     let lastResult;
     for (let i = 0; i < 200; i += 1) {
-      lastResult = await writeSlot(
-        fs,
-        paths,
-        allocator,
-        "sess-1",
-        [{ t: "ack", seq: i }],
-        new Uint8Array([1]),
-      );
+      lastResult = await writeSlot(fs, paths, allocator, "sess-1", [{ t: "ack", seq: i }]);
       expect(lastResult.ok).toBe(true);
     }
     expect(allocator.left()).toBe(0);
-    const overflow = await writeSlot(
-      fs,
-      paths,
-      allocator,
-      "sess-1",
-      [{ t: "ack", seq: 999 }],
-      new Uint8Array([1]),
-    );
+    const overflow = await writeSlot(fs, paths, allocator, "sess-1", [{ t: "ack", seq: 999 }]);
     expect(overflow.ok).toBe(false);
     if (!overflow.ok) {
       expect(overflow.error).toBe("slots_exhausted");

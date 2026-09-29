@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { access, rename, rm, writeFile } from "node:fs/promises";
 import type { SlotFs } from "../transport/slots.ts";
 
 function isMissingFile(error: unknown): boolean {
@@ -15,13 +15,25 @@ export function createFsSlots(): SlotFs {
     async writeFile(path, data) {
       await writeFile(path, data);
     },
-    async readFile(path) {
+    async exists(path) {
       try {
-        return new Uint8Array(await readFile(path));
+        await access(path);
+        return true;
       } catch (error) {
-        if (isMissingFile(error)) return undefined;
+        if (isMissingFile(error)) return false;
         throw error;
       }
+    },
+    async remove(path) {
+      try {
+        await rm(path);
+      } catch (error) {
+        if (isMissingFile(error)) return;
+        throw error;
+      }
+    },
+    async rename(from, to) {
+      await rename(from, to);
     },
   };
 }

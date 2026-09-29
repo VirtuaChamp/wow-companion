@@ -27,9 +27,12 @@ local function readAll(path)
 end
 
 _G.PlaySoundFile = function(path)
-  local index = path:match("(%d+)%.wav$")
-  local content = index and readAll(dir .. "/sig/" .. index .. ".wav")
-  return content ~= nil and #content > 0
+  local name = path:match("([%w%-]+)%.wav$")
+  local content = name and readAll(dir .. "/sig/" .. name .. ".wav")
+  if content == nil then
+    return
+  end
+  return true, 1
 end
 
 _G.C_AddOns.LoadAddOn = function(name)
