@@ -15,6 +15,15 @@ local function newRegion(kind)
     shown = true,
     text = "",
     anchors = {},
+    points = {},
+    frameLevel = 1,
+    scrollLog = {},
+    fading = true,
+    maxLines = 0,
+    mouseWheelEnabled = false,
+    hitRectInsets = { 0, 0, 0, 0 },
+    justifyH = "CENTER",
+    indentedWordWrap = false,
     children = {},
     messages = {},
     width = 0,
@@ -67,17 +76,36 @@ function methods:SetPoint(point, a, b, c, d)
   else
     relativeTo, relativePoint, x, y = self.parent, point, a, b
   end
-  self.anchors[1] = {
+  local anchor = {
     point = point,
     relativeTo = relativeTo,
     relativePoint = relativePoint or point,
     x = x or 0,
     y = y or 0,
   }
+  self.anchors[1] = anchor
+  self.points[point] = anchor
 end
 
 function methods:ClearAllPoints()
   self.anchors = {}
+  self.points = {}
+end
+
+function methods:GetPointByName(point)
+  local p = self.points[point]
+  if not p then
+    return nil
+  end
+  return p.point, p.relativeTo, p.relativePoint, p.x, p.y
+end
+
+function methods:SetFrameLevel(level)
+  self.frameLevel = level
+end
+
+function methods:GetFrameLevel()
+  return self.frameLevel
 end
 
 function methods:GetPoint(index)
@@ -104,20 +132,81 @@ function methods:SetHeight(h)
   self.height = h
 end
 
+local function anchoredSize(self)
+  local topLeft = self.points.TOPLEFT
+  local bottomRight = self.points.BOTTOMRIGHT
+  if not topLeft or not bottomRight then
+    return nil
+  end
+  local relative = topLeft.relativeTo
+  if relative == nil or relative ~= bottomRight.relativeTo then
+    return nil
+  end
+  if topLeft.relativePoint ~= "TOPLEFT" or bottomRight.relativePoint ~= "BOTTOMRIGHT" then
+    return nil
+  end
+  local relativeWidth, relativeHeight = relative:GetSize()
+  return relativeWidth + bottomRight.x - topLeft.x, relativeHeight + topLeft.y - bottomRight.y
+end
+
 function methods:GetWidth()
+  if (self.width or 0) == 0 then
+    local width = anchoredSize(self)
+    if width then
+      return width
+    end
+  end
   return self.width or 0
 end
 
 function methods:GetHeight()
-  if self.kind == "EditBox" and self.multiLine and (self.height or 0) == 0 then
+  if self.kind == "EditBox" and rawget(self, "multiLine") and (self.height or 0) == 0 then
     local perLine = math.max(math.floor(math.max(self.width or 0, 1) / 6), 1)
     return math.max(math.ceil(#(self.text or "") / perLine), 1) * 14
+  end
+  if (self.height or 0) == 0 then
+    local _, height = anchoredSize(self)
+    if height then
+      return height
+    end
   end
   return self.height or 0
 end
 
 function methods:GetSize()
-  return self.width or 0, self.height or 0
+  return self:GetWidth(), self:GetHeight()
+end
+
+function methods:SetHitRectInsets(left, right, top, bottom)
+  self.hitRectInsets = { left, right, top, bottom }
+end
+
+function methods:SetFading(flag)
+  self.fading = flag
+end
+
+function methods:SetMaxLines(maxLines)
+  self.maxLines = maxLines
+end
+
+function methods:EnableMouseWheel(flag)
+  self.mouseWheelEnabled = flag
+end
+
+function methods:ScrollUp()
+  self.scrollLog[#self.scrollLog + 1] = "up"
+end
+
+function methods:ScrollDown()
+  self.scrollLog[#self.scrollLog + 1] = "down"
+end
+
+function methods:PageUp()
+  self.scrollLog[#self.scrollLog + 1] = "pageup"
+end
+
+function methods:PageDown()
+  self.scrollLog[#self.scrollLog + 1] = "pagedown"
 end
 
 function methods:GetEffectiveScale()
@@ -160,6 +249,19 @@ end
 
 function methods:SetFontObject(fontObject)
   self.fontObject = fontObject
+  self.justifyH = "CENTER"
+end
+
+function methods:SetJustifyH(justifyH)
+  self.justifyH = justifyH
+end
+
+function methods:SetIndentedWordWrap(flag)
+  self.indentedWordWrap = flag
+end
+
+function methods:SetTextInsets(left, right, top, bottom)
+  self.textInsets = { left, right, top, bottom }
 end
 
 function methods:SetFocus()
@@ -260,7 +362,8 @@ function methods:GetStringHeight()
 end
 
 function methods:GetTextInsets()
-  return 10, 10, 0, 5
+  local insets = rawget(self, "textInsets") or { 10, 10, 0, 5 }
+  return insets[1], insets[2], insets[3], insets[4]
 end
 
 function methods:SetMovable(flag)
@@ -409,7 +512,18 @@ _G.CreateFrame = function(frameType, name, parent, template)
   if template == "ButtonFrameTemplate" then
     frame.TitleContainer = newRegion("Frame")
     frame.TitleContainer.TitleText = newRegion("FontString")
+    frame.TitleContainer:SetPoint("TOPLEFT", frame, "TOPLEFT", 58, -1)
+    frame.TitleContainer:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -24, -1)
     frame.Inset = newRegion("Frame")
+    frame.Inset:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -60)
+    frame.Inset:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 26)
+    frame.TopTileStreaks = newRegion("Texture")
+    frame.CloseButton = newRegion("Button")
+    frame.CloseButton:SetSize(24, 24)
+    frame.CloseButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, 1)
+    frame.CloseButton:SetFrameLevel(510)
+    frame.portraitShown = true
+    frame.border = "PortraitFrameTemplate"
   end
   if template == "WowStyle1DropdownTemplate" then
     installDropdown(frame)
@@ -421,6 +535,28 @@ _G.CreateFrame = function(frameType, name, parent, template)
     _G[name] = frame
   end
   return frame
+end
+
+_G.ButtonFrameTemplate_HidePortrait = function(self)
+  self.border = "ButtonFrameTemplateNoPortrait"
+  self.portraitShown = false
+  local _, insetTo, insetRelative, _, insetY = self.Inset:GetPointByName("TOPLEFT")
+  self.Inset:SetPoint("TOPLEFT", insetTo, insetRelative, 9, insetY)
+  self.TitleContainer:SetPoint("TOPLEFT", self, "TOPLEFT", 0, -1)
+  self.TitleContainer:SetPoint("TOPRIGHT", self, "TOPRIGHT", 0, -1)
+end
+
+_G.ButtonFrameTemplate_HideAttic = function(self)
+  self.Inset:SetPoint("TOPLEFT", self, "TOPLEFT", 4, -24)
+  self.TopTileStreaks:Hide()
+end
+
+_G.ButtonFrameTemplate_HideButtonBar = function(self)
+  self.Inset:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -6, 4)
+end
+
+_G.IsShiftKeyDown = function()
+  return _G.WOWC_TEST_SHIFT_DOWN == true
 end
 
 _G.UIParent = _G.UIParent or newRegion("Frame")
