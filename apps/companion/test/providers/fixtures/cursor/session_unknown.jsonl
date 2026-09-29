@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000000","model":"Auto","apiKeySource":"login","permissionMode":"default","cwd":"<workspace>"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"reply with the single word pong"}]},"session_id":"00000000-0000-4000-8000-000000000000"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]},"session_id":"00000000-0000-4000-8000-000000000000","timestamp_ms":1790535101695}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"pong"}]},"session_id":"00000000-0000-4000-8000-000000000000"}
+{"type":"result","subtype":"success","duration_ms":2864,"duration_api_ms":2864,"is_error":false,"result":"pong","session_id":"00000000-0000-4000-8000-000000000000","request_id":"f99581b1-8610-4427-90d0-a14235118cfc","usage":{"inputTokens":4,"outputTokens":4,"cacheReadTokens":8978,"cacheWriteTokens":20902}}

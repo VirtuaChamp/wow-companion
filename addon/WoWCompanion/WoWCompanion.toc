@@ -1,0 +1,14 @@
+## Interface: 16001
+## Version: 0.1.0
+## SavedVariables: WoWCompanionDB
+Codec.lua
+Inbox.lua
+Core.lua
+State.lua
+StateSender.lua
+Items.lua
+Mention.lua
+Waypoint.lua
+AiWindow.lua
+Settings.lua
+Report.lua

@@ -25,7 +25,7 @@ Owned: `apps/companion/src/adapters/providers/{claude,codex,cursor,spawn}.ts`, `
 - `provider.<id>.session_unknown` — parent — AC 7
 
 ## Must not change
-- D14: no shell, edit or write tool reachable for any provider.
+- D14: no shell tool reachable for any provider; an edit or write tool a provider cannot remove must be refused by the provider's read-only sandbox policy (codex: `-s read-only`, approval never), proven by a recorded write attempt that is refused and leaves the file unchanged (user choice 2026-09-27; an OS-level denial is not required).
 
 ## Must refuse
 - Missing binary → `provider_missing`; disabled → `provider_disabled`; auth failure text → `provider_auth` (parent Must refuse).

@@ -1,0 +1,26 @@
+{
+  "wowPath": "<folder holding WowB.exe, the _classic_beta_ flavour folder>",
+  "provider": "claude",
+  "providers": {
+    "claude": {
+      "enabled": true,
+      "model": "<model id the claude CLI offers>",
+      "effort": "medium",
+      "models": []
+    },
+    "codex": {
+      "enabled": true,
+      "model": "<model id the codex CLI offers>",
+      "effort": "medium",
+      "models": ["<model id the codex CLI offers>"]
+    },
+    "cursor": {
+      "enabled": false,
+      "model": "<model id the cursor CLI offers>",
+      "models": []
+    }
+  },
+  "companionPort": 47831,
+  "slotCount": 200,
+  "timeoutMs": 600000
+}

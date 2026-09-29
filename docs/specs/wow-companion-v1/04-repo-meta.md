@@ -13,11 +13,11 @@ wow-companion-v1-04-repo-meta
 none
 
 ## Scope
-Owned: `.github/workflows/{ci,release,release-please,pr-title}.yml`, `.github/dependabot.yml`, `.github/rulesets/{master,release-tags}.json`, `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS`, `release-please-config.json`, `.release-please-manifest.json`, `docs/branching.md`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`; `docs/versions.md` append-only (GitHub Action rows below 01's rows).
+Owned: `.github/workflows/{ci,release,release-please,pr-title}.yml`, `.github/dependabot.yml`, `.github/rulesets/{master,release-tags}.json`, `.github/ISSUE_TEMPLATE/{bug_report,feature_request}.yml`, `.github/ISSUE_TEMPLATE/config.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS`, `release-please-config.json`, `.release-please-manifest.json`, `docs/branching.md`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, `scripts/actionlint.ts` (downloads the actionlint release binary into `.tools/actionlint/` if absent, runs it over `.github/workflows/`; run by `pnpm run lint:actions`; PM decision 2026-09-27: actionlint is not installed on this machine); `docs/versions.md` append-only (GitHub Action rows below 01's rows).
 Declarative files only; the file-count cap does not apply (see `SHARED-FILES.md`).
 
 ## Code shape
-No application code. Every action SHA resolved live (`gh api repos/<owner>/<action>/git/ref/tags/<tag>`) and added to `docs/versions.md` — the one line in that file this slice appends (01 owns the file; append-only below the last row).
+No application code. Every action SHA resolved live (`git ls-remote https://github.com/<owner>/<action> refs/tags/<tag>`, peeled `^{}` sha for annotated tags; the `gh` CLI is not installed) and added to `docs/versions.md` — the one line in that file this slice appends (01 owns the file; append-only below the last row).
 
 ## Tests first
 - none beyond `actionlint` and `pnpm run guard` (SHA pins) — AC 18, 24

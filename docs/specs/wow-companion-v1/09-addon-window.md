@@ -13,15 +13,15 @@ wow-companion-v1-09-addon-window
 Fills `addon/WoWCompanion/{Core,AiWindow}.lua`, `tests/lua/stubs/chat.lua`, `tests/lua/globals/chat.lua`, `docs/client-facts.md` section "Chat window and edit box".
 
 ## Scope
-Owned: the two Lua files above, `tests/lua/{aiwindow_create,ai_route,reply_route,more_link,sanitize_chat,chats_dropdown}_test.lua`. Also `tests/lua/stubs/chat.lua` and `tests/lua/globals/chat.lua`.
+Owned: the two Lua files above, `tests/lua/{aiwindow_create,ai_route,input_route,more_link,sanitize_chat,chats_dropdown}_test.lua`. Also `tests/lua/stubs/chat.lua` and `tests/lua/globals/chat.lua`.
 
 ## Code shape
 - `Core.lua`: `ADDON_LOADED`, `WoWCompanionDB` init, `/ai` slash command and sub-commands (`new`, `chat`, `settings`, `report`, `reset`, `cancel`, `help`, `context`), dispatch of `ns.Transport.onMessage` by `t` to the owning module; `ns.Settings.open()` and `ns.Report.open()` called by name (slice 10).
-- `AiWindow.lua`: the "Claude" floating chat window, printing (`sanitize` then `AddMessage`), `[more]` link, status lines, chats dropdown, `/r` routing, the `@` popup and ghost text rendering over `ns.Mention.match`, the gear button calling `ns.Settings.open()`.
+- `AiWindow.lua`: the "Claude" floating chat window, printing (`sanitize` then `AddMessage`), `[more]` link, status lines, chats dropdown, the window's own input line (an addon-owned edit box: typing there sends to the companion) with the `@` popup, ghost text and Tab/Enter/Up/Down/Esc handling over `ns.Mention.match`; `/r` is never redirected, the gear button calling `ns.Settings.open()`.
 - `sanitize(text) → string` pure: every `|` doubled so `|c`, `|H`, `|T`, `|K` print literally.
 
 ## Tests first
-- `aiwindow.create`, `ai.route`, `reply.route`, `more.link` — parent AC 16 bullets — AC 16
+- `aiwindow.create`, `ai.route`, `input.route`, `more.link` — parent AC 16 bullets — AC 16
 - `sanitize.chat` — parent — AC 12
 - `chats.dropdown` — parent AC 22 — AC 22
 
@@ -30,16 +30,16 @@ Owned: the two Lua files above, `tests/lua/{aiwindow_create,ai_route,reply_route
 
 ## Must refuse
 - Reply text with WoW escapes → literal (AC 12). Ask on a running chat → `busy` line (AC 8, message from the companion).
-- No untainted mechanism for `/r` redirection or Tab-accept found in the `forever` source → stop and report to the PM, never replace handlers (parent AC 6).
+- Never hook or replace Blizzard chat edit boxes; `/r` is never redirected and `@` completion lives only in the Claude window's own input line (user choice 2026-09-27).
 
 ## The point everything turns on
-`/r` redirection and Tab-accept on Blizzard's edit box without taint. Check against: the mechanism cited by `forever` path:line in client-facts, and `reply.route` showing real whispers keep normal `/r`.
+The Claude window's own input line: an addon-owned edit box with the `@` popup, ghost text and key handling, and no taint on Blizzard's chat. Check against: no `SetScript` or hook on any Blizzard edit box, and `input.route` showing typed text reaches the companion.
 
 ## Acceptance Criteria
 1. `[file]` Parent AC 12. Fixture: `.tools/lua51`
-2. `[file]` Parent AC 16: `aiwindow.create`, `ai.route`, `reply.route`, `more.link`. Fixture: `tests/lua/wow_stubs.lua`
+2. `[file]` Parent AC 16: `aiwindow.create`, `ai.route`, `input.route`, `more.link`. Fixture: `tests/lua/wow_stubs.lua`
 3. `[file]` Parent AC 22, `chats.dropdown`. Fixture: as 2
-4. `[file]` Parent AC 6, Chat window part: `ChatFrameUtil` names, floating undocked window creation, every template/atlas used, the `/r` and Tab-accept mechanism. Fixture: wow-ui-source `forever` clone
+4. `[file]` Parent AC 6, Chat window part: `ChatFrameUtil` names, the floating window's templates, every template/atlas used, the input line's edit-box template and the `/ai` slash registration. Fixture: wow-ui-source `forever` clone
 
 ## Open questions
 none
