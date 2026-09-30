@@ -42,6 +42,7 @@ dialog.editBox:SetText("  Best gear  ")
 dialog.editBox:Fire("OnEnterPressed")
 assert(lastSent().t == "cmd" and lastSent().name == "rename" and lastSent().chat == "chat-7", "Enter confirms the rename for the right chat")
 assert(lastSent().arg == "Best gear", "the name is trimmed")
+assert(type(lastSent().id) == "string" and lastSent().id ~= "", "the rename carries a cmd id")
 assert(dialog:IsShown() == false, "the dialog closes after Enter")
 
 ns.AiWindow.showChatDialog("rename", chat)

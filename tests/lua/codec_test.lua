@@ -8,7 +8,7 @@ end
 local function assertHeader(frame, expectSeq, expectTotal, expectIndex, expectLength)
   assert(string.byte(frame, 1) == 0x57, "magic byte 1")
   assert(string.byte(frame, 2) == 0x43, "magic byte 2")
-  assert(string.byte(frame, 3) == 1, "version")
+  assert(string.byte(frame, 3) == 2, "version")
   assert(readU16(frame, 4) == expectSeq, "seq")
   assert(string.byte(frame, 6) == expectTotal, "total")
   assert(string.byte(frame, 7) == expectIndex, "index")
@@ -145,53 +145,92 @@ do
   assert(json == '{"1":"a","x":"b"}', "mixed number/string keys sort without crashing table.sort")
 end
 
-do
-  local grid = Codec.layoutGrid({})
-  assert(#grid == 256, "layoutGrid: empty data still emits the sync row plus one data row")
-  for i = 0, 125 do
-    assert(grid[i + 1] == i % 8, "layoutGrid: sync pattern cell " .. i)
+local ANCHOR = { 7, 1, 6, 2, 5, 3, 7, 4, 6, 2, 5, 1 }
+local OVERHEAD = 16
+
+local function assertRowHead(grid, offset, perRow, label)
+  for i = 1, #ANCHOR do
+    assert(grid[offset + i] == ANCHOR[i], label .. ": anchor cell " .. i)
   end
-  assert(grid[127] == 0, "layoutGrid: row count high cell for 1 row")
-  assert(grid[128] == 1, "layoutGrid: row count low cell for 1 row")
+  local counted = grid[offset + 13] * 512 + grid[offset + 14] * 64 + grid[offset + 15] * 8 + grid[offset + 16]
+  assert(counted == perRow, label .. ": row cell count")
+end
+
+do
+  local grid = Codec.layoutGrid({}, 100)
+  assert(#grid == OVERHEAD + 100, "layoutGrid: empty data still emits one row")
+  assertRowHead(grid, 0, 100, "empty")
+  for i = OVERHEAD + 1, #grid do
+    assert(grid[i] == 0, "layoutGrid: empty row data is zero padded")
+  end
 end
 
 do
   local dataCells = {}
-  for i = 1, 300 do
+  for i = 1, 250 do
     dataCells[i] = i % 8
   end
-  local grid = Codec.layoutGrid(dataCells)
-  local expectedRows = math.ceil(300 / 128)
-  assert(#grid == 128 + expectedRows * 128, "layoutGrid: total cells for 300 data cells")
-  assert(grid[127] == math.floor(expectedRows / 8) % 8, "layoutGrid: row count high cell")
-  assert(grid[128] == expectedRows % 8, "layoutGrid: row count low cell")
+  local grid = Codec.layoutGrid(dataCells, 100)
+  assert(#grid == 3 * (OVERHEAD + 100), "layoutGrid: 250 cells at 100 per row make 3 rows")
+  for k = 0, 2 do
+    assertRowHead(grid, k * (OVERHEAD + 100), 100, "row " .. k)
+  end
+  for i = 1, 250 do
+    local k = math.floor((i - 1) / 100)
+    local within = (i - 1) % 100
+    assert(grid[k * (OVERHEAD + 100) + OVERHEAD + within + 1] == dataCells[i], "layoutGrid: data cell " .. i)
+  end
+  for i = 251, 300 do
+    local k = math.floor((i - 1) / 100)
+    local within = (i - 1) % 100
+    assert(grid[k * (OVERHEAD + 100) + OVERHEAD + within + 1] == 0, "layoutGrid: padding cell " .. i)
+  end
+end
+
+do
+  local exact = {}
   for i = 1, 300 do
-    assert(grid[128 + i] == dataCells[i], "layoutGrid: data cell " .. i .. " preserved")
+    exact[i] = 1
   end
-  for i = 301, expectedRows * 128 do
-    assert(grid[128 + i] == 0, "layoutGrid: padding cell " .. i .. " is zero")
+  local grid, err = Codec.layoutGrid(exact, 100)
+  assert(grid ~= nil and err == nil, "layoutGrid: exactly three rows fit")
+  local oversized = {}
+  for i = 1, 301 do
+    oversized[i] = 1
+  end
+  local none, tooLarge = Codec.layoutGrid(oversized, 100)
+  assert(none == nil and tooLarge == "too_large", "layoutGrid: a fourth row is too_large")
+end
+
+do
+  assert(Codec.dataCellsPerRow(1920) == 928, "1920 wide: 928 data cells per row")
+  assert(Codec.dataCellsPerRow(2560) == 1248, "2560 wide: 1248 data cells per row")
+  assert(Codec.dataCellsPerRow(1000) == 468, "1000 wide: 468 data cells per row")
+  assert(math.floor(928 * 3 * 3 / 8) == 1044, "1920 wide: 1044 bytes per frame")
+  assert(math.floor(1248 * 3 * 3 / 8) == 1404, "2560 wide: 1404 bytes per frame")
+  assert(Codec.framePayloadMax(1920) == 1024, "1920 wide: payload capped at 1024")
+  assert(Codec.framePayloadMax(2560) == 1024, "2560 wide: payload capped at 1024")
+  assert(Codec.framePayloadMax(1000) == math.floor(468 * 9 / 8) - 11, "narrow screens shrink the payload")
+end
+
+do
+  local payload = string.rep("x", 3000)
+  local frames = Codec.toFrames(payload, 3, Codec.framePayloadMax(1280))
+  local cap = Codec.framePayloadMax(1280)
+  assert(cap < 1024, "1280 wide: payload below the hard cap")
+  assert(#frames == math.ceil(3000 / cap), "toFrames honours the width-derived payload size")
+  for _, frame in ipairs(frames) do
+    local cells = Codec.render(frame)
+    local grid = Codec.layoutGrid(cells, Codec.dataCellsPerRow(1280))
+    assert(grid ~= nil, "every frame fits three rows at the width it was sized for")
   end
 end
 
 do
-  local exactData = {}
-  for i = 1, 63 * 128 do
-    exactData[i] = 1
-  end
-  local grid, err = Codec.layoutGrid(exactData)
-  assert(grid ~= nil, "layoutGrid: exactly 63 data rows produces a grid")
-  assert(err == nil, "layoutGrid: exactly 63 data rows reports no error")
-  assert(#grid == 128 + 63 * 128, "layoutGrid: exactly 63 data rows sizes the grid correctly")
-end
-
-do
-  local oversizedData = {}
-  for i = 1, 63 * 128 + 1 do
-    oversizedData[i] = 1
-  end
-  local grid, err = Codec.layoutGrid(oversizedData)
-  assert(grid == nil, "layoutGrid: 64 data rows produces no grid")
-  assert(err == "too_large", "layoutGrid: 64 data rows reports too_large")
+  local frames, err = Codec.toFrames(string.rep("x", 255), 1, 1)
+  assert(err == nil and #frames == 255, "255 frames still fit the one byte frame count")
+  local none, tooMany = Codec.toFrames(string.rep("x", 256), 1, 1)
+  assert(none == nil and tooMany == "too_large", "256 frames do not fit the frame count byte and are refused, not raised")
 end
 
 print("codec: all assertions passed")

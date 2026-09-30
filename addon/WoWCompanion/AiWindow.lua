@@ -188,6 +188,14 @@ local function nextAskId()
   return "ask-" .. token:sub(-ASK_ID_SESSION_MAX) .. "-" .. askCounter
 end
 
+function AiWindow.sendCmd(fields)
+  AiWindow.cmdCounter = (AiWindow.cmdCounter or 0) + 1
+  local token = tostring(ns.Transport.session()):gsub("[^A-Za-z0-9_%-]", "_")
+  fields.t = "cmd"
+  fields.id = "cmd-" .. token:sub(-ASK_ID_SESSION_MAX) .. "-" .. AiWindow.cmdCounter
+  return ns.Transport.send(fields)
+end
+
 local function providerLabel(providerId)
   if not providerId or providerId == "claude" then
     return "Claude"
@@ -1023,12 +1031,12 @@ function AiWindow.submitAsk(text)
 end
 
 function AiWindow.newChat(name)
-  ns.Transport.send({ t = "cmd", chat = activeChat, name = "new", arg = (name ~= "" and name) or nil })
+  AiWindow.sendCmd({ chat = activeChat, name = "new", arg = (name ~= "" and name) or nil })
 end
 
 function AiWindow.openChatByName(name)
   if name == "" then
-    ns.Transport.send({ t = "cmd", chat = activeChat, name = "open" })
+    AiWindow.sendCmd({ chat = activeChat, name = "open" })
     return
   end
   for _, entry in ipairs(chatsList) do
@@ -1041,7 +1049,7 @@ function AiWindow.openChatByName(name)
 end
 
 function AiWindow.sendCommand(name)
-  ns.Transport.send({ t = "cmd", chat = activeChat, name = name })
+  AiWindow.sendCmd({ chat = activeChat, name = name })
 end
 
 function AiWindow.printHelp()
@@ -1085,9 +1093,9 @@ local function acceptChatDialog()
     if newName == "" then
       return
     end
-    ns.Transport.send({ t = "cmd", chat = dialogChatId, name = "rename", arg = newName })
+    AiWindow.sendCmd({ chat = dialogChatId, name = "rename", arg = newName })
   elseif dialogMode == "delete" then
-    ns.Transport.send({ t = "cmd", chat = dialogChatId, name = "delete" })
+    AiWindow.sendCmd({ chat = dialogChatId, name = "delete" })
   end
   closeChatDialog()
 end
@@ -1284,7 +1292,7 @@ local function refreshSidebarRows()
 end
 
 function AiWindow.switchToChat(chatId)
-  ns.Transport.send({ t = "cmd", chat = chatId, name = "open" })
+  AiWindow.sendCmd({ chat = chatId, name = "open" })
   if not messageBox or chatId == shownChat then
     return
   end
@@ -1414,13 +1422,15 @@ local ERROR_LINES = {
   provider_auth = "[Claude] provider needs sign-in.",
   provider_disabled = "[Claude] provider disabled in settings.",
   session_unknown = "[Claude] chat session was reset.",
+  daemon_error = "[Claude] the companion could not handle that message; try again.",
 }
 
 function AiWindow.onError(msg)
   if msg.id then
     clearStatus(msg.id)
   end
-  local line = ERROR_LINES[msg.code] or ("[Claude] error: " .. sanitize(tostring(msg.code)))
+  local detail = type(msg.message) == "string" and msg.message ~= "" and msg.message or msg.code
+  local line = ERROR_LINES[msg.code] or ("[Claude] error: " .. sanitize(tostring(detail)))
   if msg.chat and msg.chat ~= activeChat then
     local notices = chatNotices[msg.chat] or {}
     chatNotices[msg.chat] = notices
@@ -1505,7 +1515,7 @@ function AiWindow.handleAddonLink(link)
     return
   end
   if kind == "open" then
-    ns.Transport.send({ t = "cmd", chat = id, name = "open" })
+    AiWindow.sendCmd({ chat = id, name = "open" })
   elseif kind == "waypoint" then
     local waypoint = waypointOffers[id]
     if not waypoint then
@@ -1547,7 +1557,7 @@ local function buildSidebar(parent)
   newChatButton:SetPoint("TOPLEFT", sidebar, "TOPLEFT", SIDEBAR_PADDING, -SIDEBAR_PADDING)
   newChatButton:SetPoint("TOPRIGHT", sidebar, "TOPRIGHT", -SIDEBAR_PADDING, -SIDEBAR_PADDING)
   newChatButton:SetScript("OnClick", function()
-    ns.Transport.send({ t = "cmd", chat = activeChat, name = "new" })
+    AiWindow.sendCmd({ chat = activeChat, name = "new" })
   end)
 
   sidebarBox = CreateFrame("Frame", "WoWCompanionAiWindowChatList", sidebar, "WowScrollBoxList")

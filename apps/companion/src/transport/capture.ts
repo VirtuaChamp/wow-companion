@@ -1,92 +1,70 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { unlinkSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Cell, CellGrid } from "./grid.ts";
-import { parseCellGridFile } from "./grid.ts";
+import { LINE_MAX_ROWS, LINE_ROW_HEIGHT_PX } from "./grid.ts";
+import type { LineCapture, Strip } from "./line-reader.ts";
 
 export type FrameSource = {
-  next(): Promise<CellGrid | undefined>;
+  next(): Promise<LineCapture | undefined>;
   close(): void;
 };
 
-export function createGridFileSource(path: string): FrameSource {
-  return {
-    async next(): Promise<CellGrid | undefined> {
-      let text: string;
-      try {
-        text = await readFile(path, "utf-8");
-      } catch {
-        return undefined;
-      }
-      const parsed = parseCellGridFile(text);
-      return parsed.ok ? parsed.value : undefined;
-    },
-    close(): void {},
-  };
-}
+const CAPTURE_STRIP_ROWS = LINE_MAX_ROWS * LINE_ROW_HEIGHT_PX + 2;
+const HEADER_BYTES = 8;
+const CAPTURE_MAGIC = [0x57, 0x43, 0x4c, 0x31] as const;
+const MAX_CAPTURE_WIDTH_PX = 16_384;
 
 export type ScreenCaptureConfig = {
   windowProcessName: string;
-  gridWidthCells: number;
-  gridHeightCells: number;
-  cellPhysicalSize: number;
+  stripRows?: number;
   powershellPath?: string;
   captureTimeoutMs?: number;
   onCaptureError?: (error: unknown) => void;
 };
 
-const PURE_COLORS: readonly (readonly [number, number, number])[] = [
-  [0, 0, 0],
-  [0, 0, 255],
-  [0, 255, 0],
-  [0, 255, 255],
-  [255, 0, 0],
-  [255, 0, 255],
-  [255, 255, 0],
-  [255, 255, 255],
-];
+export type CaptureHeader = { kind: "width"; widthPx: number } | { kind: "desync" };
 
-function classifyChannel(value: number): 0 | 1 {
-  return value >= 128 ? 1 : 0;
-}
-
-export function classifyCell(r: number, g: number, b: number): Cell {
-  const rBit = classifyChannel(r);
-  const gBit = classifyChannel(g);
-  const bBit = classifyChannel(b);
-  const index = PURE_COLORS.findIndex(
-    ([pr, pg, pb]) => pr === rBit * 255 && pg === gBit * 255 && pb === bBit * 255,
-  );
-  return (index === -1 ? 0 : index) as Cell;
-}
-
-export function bgr24BufferToCells(
-  pixels: Uint8Array,
-  strideBytes: number,
-  gridWidthCells: number,
-  gridHeightCells: number,
-  cellPhysicalSize: number,
-): Cell[] {
-  const cells: Cell[] = [];
-  for (let row = 0; row < gridHeightCells; row += 1) {
-    for (let col = 0; col < gridWidthCells; col += 1) {
-      const px = col * cellPhysicalSize + Math.floor(cellPhysicalSize / 2);
-      const py = row * cellPhysicalSize + Math.floor(cellPhysicalSize / 2);
-      const offset = py * strideBytes + px * 3;
-      const b = pixels[offset] ?? 0;
-      const g = pixels[offset + 1] ?? 0;
-      const r = pixels[offset + 2] ?? 0;
-      cells.push(classifyCell(r, g, b));
-    }
+export function parseCaptureHeader(header: Uint8Array): CaptureHeader {
+  if (header.length !== HEADER_BYTES || CAPTURE_MAGIC.some((byte, i) => header[i] !== byte)) {
+    return { kind: "desync" };
   }
-  return cells;
+  const widthPx = new DataView(header.buffer, header.byteOffset, header.byteLength).getInt32(
+    CAPTURE_MAGIC.length,
+    true,
+  );
+  return widthPx < 0 || widthPx > MAX_CAPTURE_WIDTH_PX
+    ? { kind: "desync" }
+    : { kind: "width", widthPx };
+}
+
+export function bgrStride(widthPx: number): number {
+  return Math.ceil((widthPx * 3) / 4) * 4;
+}
+
+export function stripsFromBuffer(
+  widthPx: number,
+  stripRows: number,
+  buffer: Uint8Array,
+): LineCapture | undefined {
+  const stride = bgrStride(widthPx);
+  const stripBytes = stride * stripRows;
+  if (widthPx <= 0 || buffer.length < stripBytes * 2) {
+    return undefined;
+  }
+  const strip = (edge: Strip["edge"], from: number): Strip => ({
+    edge,
+    width: widthPx,
+    rows: stripRows,
+    stride,
+    pixels: buffer.subarray(from, from + stripBytes),
+  });
+  return { strips: [strip("top", 0), strip("bottom", stripBytes)] };
 }
 
 function buildCaptureScript(): string {
   return [
-    "param([string]$ProcessName,[int]$RegionWidth,[int]$RegionHeight)",
+    "param([string]$ProcessName,[int]$StripRows)",
     "Add-Type -AssemblyName System.Drawing",
     "Add-Type -Namespace WowC -Name Native -MemberDefinition @'",
     '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();',
@@ -99,13 +77,39 @@ function buildCaptureScript(): string {
     "$stdout = [Console]::OpenStandardOutput()",
     "$stdin = [Console]::OpenStandardInput()",
     "$reader = New-Object System.IO.StreamReader($stdin)",
-    "$blank = New-Object byte[] ($RegionWidth * $RegionHeight * 3)",
+    "function Send-Header([int]$width) {",
+    "  $magic = [byte[]](0x57, 0x43, 0x4C, 0x31)",
+    "  $stdout.Write($magic, 0, 4)",
+    "  $head = [BitConverter]::GetBytes($width)",
+    "  $stdout.Write($head, 0, 4)",
+    "}",
+    "function Grab-Strip([int]$x, [int]$y, [int]$w, [int]$rows) {",
+    "  $bmp = New-Object System.Drawing.Bitmap $w, $rows",
+    "  $g = [System.Drawing.Graphics]::FromImage($bmp)",
+    "  $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $rows)))",
+    "  $data = $bmp.LockBits((New-Object System.Drawing.Rectangle(0, 0, $w, $rows)), [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)",
+    "  $bytes = New-Object byte[] ($data.Stride * $rows)",
+    "  [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)",
+    "  $bmp.UnlockBits($data)",
+    "  $g.Dispose()",
+    "  $bmp.Dispose()",
+    "  return ,$bytes",
+    "}",
     "while ($true) {",
     "  $line = $reader.ReadLine()",
     "  if ($line -eq $null) { break }",
     "  $proc = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Select-Object -First 1",
     "  if ($proc -eq $null -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {",
-    "    $stdout.Write($blank, 0, $blank.Length)",
+    "    Send-Header 0",
+    "    $stdout.Flush()",
+    "    continue",
+    "  }",
+    "  $rect = New-Object WowC.Native+RECT",
+    "  [WowC.Native]::GetClientRect($proc.MainWindowHandle, [ref]$rect) | Out-Null",
+    "  $w = $rect.Right - $rect.Left",
+    "  $h = $rect.Bottom - $rect.Top",
+    "  if ($w -lt 1 -or $h -lt (2 * $StripRows)) {",
+    "    Send-Header 0",
     "    $stdout.Flush()",
     "    continue",
     "  }",
@@ -113,16 +117,11 @@ function buildCaptureScript(): string {
     "  $origin.X = 0",
     "  $origin.Y = 0",
     "  [WowC.Native]::ClientToScreen($proc.MainWindowHandle, [ref]$origin) | Out-Null",
-    "  $bmp = New-Object System.Drawing.Bitmap $RegionWidth, $RegionHeight",
-    "  $g = [System.Drawing.Graphics]::FromImage($bmp)",
-    "  $g.CopyFromScreen($origin.X, $origin.Y, 0, 0, (New-Object System.Drawing.Size($RegionWidth, $RegionHeight)))",
-    "  $data = $bmp.LockBits((New-Object System.Drawing.Rectangle(0, 0, $RegionWidth, $RegionHeight)), [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)",
-    "  $bytes = New-Object byte[] ($data.Stride * $RegionHeight)",
-    "  [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)",
-    "  $bmp.UnlockBits($data)",
-    "  $g.Dispose()",
-    "  $bmp.Dispose()",
-    "  $stdout.Write($bytes, 0, $bytes.Length)",
+    "  $top = Grab-Strip $origin.X $origin.Y $w $StripRows",
+    "  $bottom = Grab-Strip $origin.X ($origin.Y + $h - $StripRows) $w $StripRows",
+    "  Send-Header $w",
+    "  $stdout.Write($top, 0, $top.Length)",
+    "  $stdout.Write($bottom, 0, $bottom.Length)",
     "  $stdout.Flush()",
     "}",
   ].join("\n");
@@ -130,71 +129,64 @@ function buildCaptureScript(): string {
 
 type ReadResult = { kind: "data"; buffer: Buffer } | { kind: "closed" } | { kind: "timeout" };
 
+type ByteReader = {
+  read(byteLength: number, timeoutMs: number): Promise<ReadResult>;
+};
+
 const DEFAULT_CAPTURE_TIMEOUT_MS = 2000;
 
-function readExact(
-  child: ChildProcessWithoutNullStreams,
-  byteLength: number,
-  timeoutMs: number,
-): Promise<ReadResult> {
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    let received = 0;
-    let settled = false;
+function createByteReader(child: ChildProcessWithoutNullStreams): ByteReader {
+  let buffered = Buffer.alloc(0);
+  let closed = false;
+  let wake: (() => void) | undefined;
 
-    function cleanup(): void {
-      child.stdout.off("data", onData);
-      child.off("close", onClose);
-      clearTimeout(timer);
-    }
-
-    function onData(chunk: Buffer): void {
-      if (settled) {
-        return;
-      }
-      chunks.push(chunk);
-      received += chunk.length;
-      if (received >= byteLength) {
-        settled = true;
-        cleanup();
-        resolve({ kind: "data", buffer: Buffer.concat(chunks).subarray(0, byteLength) });
-      }
-    }
-
-    function onClose(): void {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve({ kind: "closed" });
-    }
-
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve({ kind: "timeout" });
-    }, timeoutMs);
-
-    child.stdout.on("data", onData);
-    child.on("close", onClose);
+  child.stdout.on("data", (chunk: Buffer) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    wake?.();
   });
+  child.on("close", () => {
+    closed = true;
+    wake?.();
+  });
+
+  return {
+    read(byteLength: number, timeoutMs: number): Promise<ReadResult> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          wake = undefined;
+          resolve({ kind: "timeout" });
+        }, timeoutMs);
+        function settle(): void {
+          if (buffered.length >= byteLength) {
+            clearTimeout(timer);
+            wake = undefined;
+            const taken = buffered.subarray(0, byteLength);
+            buffered = buffered.subarray(byteLength);
+            resolve({ kind: "data", buffer: taken });
+            return;
+          }
+          if (closed) {
+            clearTimeout(timer);
+            wake = undefined;
+            resolve({ kind: "closed" });
+          }
+        }
+        wake = settle;
+        settle();
+      });
+    },
+  };
 }
 
 export function createScreenCaptureSource(config: ScreenCaptureConfig): FrameSource {
-  const widthPx = config.gridWidthCells * config.cellPhysicalSize;
-  const heightPx = config.gridHeightCells * config.cellPhysicalSize;
-  const strideBytes = widthPx * 3;
-  const frameByteLength = strideBytes * heightPx;
+  const stripRows = config.stripRows ?? CAPTURE_STRIP_ROWS;
   const captureTimeoutMs = config.captureTimeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
   const scriptPath = join(tmpdir(), `wowc-capture-${process.pid}-${Date.now()}.ps1`);
   writeFileSync(scriptPath, buildCaptureScript(), "utf-8");
 
   let closed = false;
   let child: ChildProcessWithoutNullStreams;
+  let reader: ByteReader;
 
   function spawnChild(): ChildProcessWithoutNullStreams {
     const next = spawn(
@@ -207,8 +199,7 @@ export function createScreenCaptureSource(config: ScreenCaptureConfig): FrameSou
         "-File",
         scriptPath,
         config.windowProcessName,
-        String(widthPx),
-        String(heightPx),
+        String(stripRows),
       ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
@@ -219,6 +210,7 @@ export function createScreenCaptureSource(config: ScreenCaptureConfig): FrameSou
       config.onCaptureError?.(error);
     });
     next.stderr.resume();
+    reader = createByteReader(next);
     return next;
   }
 
@@ -233,8 +225,23 @@ export function createScreenCaptureSource(config: ScreenCaptureConfig): FrameSou
 
   child = spawnChild();
 
+  async function readOrRespawn(byteLength: number): Promise<Buffer | undefined> {
+    const result = await reader.read(byteLength, captureTimeoutMs);
+    if (result.kind === "data") {
+      return result.buffer;
+    }
+    if (result.kind === "timeout") {
+      config.onCaptureError?.(new Error("screen capture: read timed out"));
+      respawnChild();
+    } else if (!closed) {
+      config.onCaptureError?.(new Error("screen capture: child process closed"));
+      respawnChild();
+    }
+    return undefined;
+  }
+
   return {
-    async next(): Promise<CellGrid | undefined> {
+    async next(): Promise<LineCapture | undefined> {
       if (closed) {
         return undefined;
       }
@@ -245,26 +252,22 @@ export function createScreenCaptureSource(config: ScreenCaptureConfig): FrameSou
         respawnChild();
         return undefined;
       }
-      const result = await readExact(child, frameByteLength, captureTimeoutMs);
-      if (result.kind === "timeout") {
-        config.onCaptureError?.(new Error("screen capture: read timed out"));
+      const header = await readOrRespawn(HEADER_BYTES);
+      if (header === undefined) {
+        return undefined;
+      }
+      const parsed = parseCaptureHeader(header);
+      if (parsed.kind === "desync") {
+        config.onCaptureError?.(new Error("screen capture: out of step with the capture process"));
         respawnChild();
         return undefined;
       }
-      if (result.kind === "closed") {
-        if (!closed) {
-          config.onCaptureError?.(new Error("screen capture: child process closed"));
-          respawnChild();
-        }
+      const widthPx = parsed.widthPx;
+      if (widthPx === 0) {
         return undefined;
       }
-      return bgr24BufferToCells(
-        result.buffer,
-        strideBytes,
-        config.gridWidthCells,
-        config.gridHeightCells,
-        config.cellPhysicalSize,
-      );
+      const body = await readOrRespawn(bgrStride(widthPx) * stripRows * 2);
+      return body === undefined ? undefined : stripsFromBuffer(widthPx, stripRows, body);
     },
     close(): void {
       closed = true;

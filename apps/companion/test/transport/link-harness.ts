@@ -2,9 +2,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CellGrid } from "../../src/transport/grid.ts";
-import { parseCellGridFile } from "../../src/transport/grid.ts";
+import type { Cell, CellGrid } from "../../src/transport/grid.ts";
+import { layoutRows, parseCellGridFile } from "../../src/transport/grid.ts";
+import { crc16 } from "../../src/transport/codec.ts";
 import type { FrameSource } from "../../src/transport/capture.ts";
+import type { LineCapture } from "../../src/transport/line-reader.ts";
+import { readFile } from "node:fs/promises";
+import { paintedRowsFromFlat, renderLineCapture } from "./line-render.ts";
+import type { RenderOptions } from "./line-render.ts";
 
 export const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
 
@@ -92,12 +97,77 @@ export function encodeHelloGridFile(
   return join(outDir, "frame-0.grid");
 }
 
+export function captureOfGrid(grid: CellGrid): LineCapture {
+  return renderLineCapture(paintedRowsFromFlat(grid));
+}
+
 export function switchableSource(current: () => string): FrameSource {
   return {
-    async next(): Promise<CellGrid | undefined> {
+    async next(): Promise<LineCapture | undefined> {
       const parsed = parseCellGridFile(readFileSync(current(), "utf-8"));
-      return parsed.ok ? parsed.value : undefined;
+      return parsed.ok ? captureOfGrid(parsed.value) : undefined;
     },
     close(): void {},
   };
+}
+
+export function createGridFileSource(path: string, options: RenderOptions = {}): FrameSource {
+  return {
+    async next(): Promise<LineCapture | undefined> {
+      let text: string;
+      try {
+        text = await readFile(path, "utf-8");
+      } catch {
+        return undefined;
+      }
+      const parsed = parseCellGridFile(text);
+      return parsed.ok ? renderLineCapture(paintedRowsFromFlat(parsed.value), options) : undefined;
+    },
+    close(): void {},
+  };
+}
+
+function paintedChunk(
+  version: number,
+  body: Uint8Array,
+  seq: number,
+  total: number,
+  index: number,
+): CellGrid {
+  const head = [
+    0x57,
+    0x43,
+    version,
+    (seq >> 8) & 0xff,
+    seq & 0xff,
+    total,
+    index,
+    (body.length >> 8) & 0xff,
+    body.length & 0xff,
+  ];
+  const bytes = new Uint8Array([...head, ...body]);
+  const crc = crc16(bytes);
+  const framed = new Uint8Array([...bytes, (crc >> 8) & 0xff, crc & 0xff]);
+  const bits = [...framed].flatMap((byte) =>
+    Array.from({ length: 8 }, (_, i) => (byte >> (7 - i)) & 1),
+  );
+  const cells: Cell[] = [];
+  for (let i = 0; i < bits.length; i += 3) {
+    cells.push((((bits[i] ?? 0) << 2) | ((bits[i + 1] ?? 0) << 1) | (bits[i + 2] ?? 0)) as Cell);
+  }
+  const rows = layoutRows(cells, 900);
+  if (rows === undefined) throw new Error("fixture does not fit");
+  return rows.flat();
+}
+
+export function paintedFrameWithVersion(version: number, json: string, seq = 1): CellGrid {
+  return paintedChunk(version, new TextEncoder().encode(json), seq, 1, 0);
+}
+
+export function paintedMultiFrame(json: string, seq: number, parts: number): readonly CellGrid[] {
+  const body = new TextEncoder().encode(json);
+  const size = Math.ceil(body.length / parts);
+  return Array.from({ length: parts }, (_, index) =>
+    paintedChunk(2, body.slice(index * size, (index + 1) * size), seq, parts, index),
+  );
 }

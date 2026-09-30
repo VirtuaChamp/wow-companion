@@ -19,6 +19,11 @@ local STRINGS = {
   noModelsReason = "No models listed",
   textSizeLabel = "Text size",
   textSizeTooltip = "How large the text is in the Claude window: chat bubbles, the chat list and the input line.",
+  linePositionLabel = "Signal line position",
+  linePositionTooltip = "The thin line that sends game data to the companion is normally invisible and only "
+    .. "blinks while a message is being sent. Move it if another addon or overlay covers it.",
+  linePositionTop = "Top edge",
+  linePositionBottom = "Bottom edge",
   minimapLabel = "Show minimap button",
   minimapTooltip = "Show the WoW Companion button on the minimap. "
     .. "Left-click opens or closes the Claude window, right-click opens these settings.",
@@ -38,6 +43,7 @@ local VARIABLES = {
   hub = "WOWC_HUB",
   textSize = "WOWC_TEXT_SIZE",
   minimap = "WOWC_MINIMAP",
+  linePosition = "WOWC_LINE_POSITION",
 }
 
 local state = {
@@ -146,6 +152,13 @@ function ns.Settings.textSizeOptions()
     table.insert(entries, { value = choice.key, label = choice.label })
   end
   return textOptions(entries)
+end
+
+function ns.Settings.linePositionOptions()
+  return textOptions({
+    { value = "top", label = STRINGS.linePositionTop },
+    { value = "bottom", label = STRINGS.linePositionBottom },
+  })
 end
 
 function ns.Settings.providerOptions()
@@ -494,6 +507,21 @@ local function ensureCategory()
     end
   )
   Settings.CreateDropdown(category, textSizeSetting, ns.Settings.textSizeOptions, STRINGS.textSizeTooltip)
+
+  local linePositionSetting = Settings.RegisterProxySetting(
+    category,
+    VARIABLES.linePosition,
+    Settings.VarType.String,
+    STRINGS.linePositionLabel,
+    "top",
+    function()
+      return ns.Transport.linePosition()
+    end,
+    function(value)
+      ns.Transport.setLinePosition(value)
+    end
+  )
+  Settings.CreateDropdown(category, linePositionSetting, ns.Settings.linePositionOptions, STRINGS.linePositionTooltip)
 
   local minimapSetting = Settings.RegisterProxySetting(
     category,

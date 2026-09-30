@@ -1,15 +1,9 @@
 import { parseGameToCompanion } from "@wow-companion/contracts";
 import type { GameToCompanion, Result } from "@wow-companion/contracts";
 import type { CellGrid } from "./grid.ts";
-import {
-  GRID_ROW_COUNT_CELLS,
-  GRID_SYNC_PATTERN_CELLS,
-  GRID_WIDTH,
-  decodeRowCount,
-  syncRowCell,
-} from "./grid.ts";
+import { splitPaintedRows } from "./grid.ts";
 
-const CODEC_VERSION = 1;
+export const CODEC_VERSION = 2;
 const CODEC_MAGIC = [0x57, 0x43] as const;
 const HEADER_LEN = 9;
 const CRC_LEN = 2;
@@ -66,21 +60,21 @@ function bitsToBytes(bits: readonly number[]): Uint8Array {
   return bytes;
 }
 
-export function decodeGrid(grid: CellGrid): Result<Frame, "bad_frame"> {
-  if (grid.length < GRID_WIDTH) {
+export function hasMagic(dataCells: CellGrid): boolean {
+  if (dataCells.length < HEADER_CELLS) {
+    return false;
+  }
+  const headerBytes = bitsToBytes(cellsToBits(dataCells.slice(0, HEADER_CELLS)));
+  return headerBytes[0] === CODEC_MAGIC[0] && headerBytes[1] === CODEC_MAGIC[1];
+}
+
+export function decodeRows(rows: readonly CellGrid[]): Result<Frame, "bad_frame"> {
+  const perRow = rows[0]?.length ?? 0;
+  if (perRow === 0 || rows.some((row) => row.length !== perRow)) {
     return bad();
   }
-  for (let i = 0; i < GRID_SYNC_PATTERN_CELLS; i += 1) {
-    if (grid[i] !== syncRowCell(i)) {
-      return bad();
-    }
-  }
-  const rowCount = decodeRowCount(
-    grid[GRID_SYNC_PATTERN_CELLS] ?? 0,
-    grid[GRID_SYNC_PATTERN_CELLS + GRID_ROW_COUNT_CELLS - 1] ?? 0,
-  );
-  const dataCells = grid.slice(GRID_WIDTH, GRID_WIDTH + rowCount * GRID_WIDTH);
-  if (dataCells.length < rowCount * GRID_WIDTH) {
+  const dataCells = rows.flat() as CellGrid;
+  if (dataCells.length < HEADER_CELLS) {
     return bad();
   }
   const headerBits = cellsToBits(dataCells.slice(0, HEADER_CELLS)).slice(0, HEADER_LEN * 8);
@@ -99,7 +93,7 @@ export function decodeGrid(grid: CellGrid): Result<Frame, "bad_frame"> {
   const frameByteLen = HEADER_LEN + length + CRC_LEN;
   const requiredBits = frameByteLen * 8;
   const requiredCells = Math.ceil(requiredBits / 3);
-  if (Math.ceil(requiredCells / GRID_WIDTH) !== rowCount) {
+  if (Math.max(1, Math.ceil(requiredCells / perRow)) !== rows.length) {
     return bad();
   }
   const allBits = cellsToBits(dataCells);
@@ -116,6 +110,11 @@ export function decodeGrid(grid: CellGrid): Result<Frame, "bad_frame"> {
     return bad();
   }
   return { ok: true, value: { version, seq, total, index, payload } };
+}
+
+export function decodeGrid(painted: CellGrid): Result<Frame, "bad_frame"> {
+  const rows = splitPaintedRows(painted);
+  return rows.ok ? decodeRows(rows.value) : bad();
 }
 
 function decodePayload(payload: Uint8Array): Result<GameToCompanion, "bad_frame" | "too_large"> {

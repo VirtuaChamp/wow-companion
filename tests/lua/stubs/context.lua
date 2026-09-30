@@ -294,7 +294,15 @@ end
 _G.C_Timer = {
   After = function(seconds, callback)
     _G.WOWC_TEST_TIMER_CALLBACKS = _G.WOWC_TEST_TIMER_CALLBACKS or {}
-    table.insert(_G.WOWC_TEST_TIMER_CALLBACKS, { seconds = seconds, callback = callback })
+    table.insert(_G.WOWC_TEST_TIMER_CALLBACKS, {
+      seconds = seconds,
+      callback = function(...)
+        if not _G.WOWC_TEST_FREEZE_CLOCK then
+          _G.WOWC_TEST_GAME_TIME = (_G.WOWC_TEST_GAME_TIME or 0) + seconds
+        end
+        return callback(...)
+      end,
+    })
   end,
   NewTicker = function(seconds, callback)
     _G.WOWC_TEST_TICKERS = _G.WOWC_TEST_TICKERS or {}

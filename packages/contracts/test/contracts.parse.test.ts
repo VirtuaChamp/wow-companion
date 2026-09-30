@@ -73,8 +73,8 @@ const gameToCompanionSamples: GameToCompanion[] = [
       },
     ],
   },
-  { t: "cmd", chat: "chat-1", name: "new" },
-  { t: "cmd", chat: "chat-1", name: "rename", arg: "New Name" },
+  { t: "cmd", id: "cmd-1", chat: "chat-1", name: "new" },
+  { t: "cmd", id: "cmd-2", chat: "chat-1", name: "rename", arg: "New Name" },
   { t: "settings", provider: "claude", model: "opus", effort: "medium" },
   { t: "settings", chat: "chat-1", provider: "codex", model: "gpt" },
 ];
@@ -473,8 +473,19 @@ describe("contracts.parse", () => {
     });
   });
 
+  it("rejects a cmd without a string id", () => {
+    expect(parseGameToCompanion({ t: "cmd", chat: "c", name: "new" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+    expect(parseGameToCompanion({ t: "cmd", id: 7, chat: "c", name: "new" })).toEqual({
+      ok: false,
+      error: "bad_frame",
+    });
+  });
+
   it("rejects cmd.name outside the known command set", () => {
-    expect(parseGameToCompanion({ t: "cmd", chat: "c", name: "explode" })).toEqual({
+    expect(parseGameToCompanion({ t: "cmd", id: "cmd-3", chat: "c", name: "explode" })).toEqual({
       ok: false,
       error: "bad_frame",
     });

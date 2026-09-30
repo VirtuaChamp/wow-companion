@@ -3,9 +3,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { crc16, decodeGrid, reassemble } from "../src/transport/codec.ts";
+import { crc16, decodeGrid, decodeRows, reassemble } from "../src/transport/codec.ts";
 import type { Frame, FrameBuffer } from "../src/transport/codec.ts";
-import { encodeRowCount, parseCellGridFile, syncRowCell } from "../src/transport/grid.ts";
+import { layoutRows, parseCellGridFile, splitPaintedRows } from "../src/transport/grid.ts";
+import { createLineReader } from "../src/transport/line-reader.ts";
+import type { LineCapture } from "../src/transport/line-reader.ts";
+import { paintedRowsFromFlat, renderLineCapture } from "./transport/line-render.ts";
+import type { RenderOptions } from "./transport/line-render.ts";
 import type { Cell, CellGrid } from "../src/transport/grid.ts";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..");
@@ -119,26 +123,24 @@ function bytesToDataCells(bytes: Uint8Array): Cell[] {
 }
 
 function layoutGridCells(dataCells: readonly Cell[]): CellGrid {
-  const rowCount = Math.max(1, Math.ceil(dataCells.length / 128));
-  const grid: Cell[] = [];
-  for (let i = 0; i < 126; i += 1) {
-    grid.push(syncRowCell(i));
+  const rows = layoutRows(dataCells, 2000);
+  if (rows === undefined) {
+    throw new Error("fixture does not fit three rows");
   }
-  const [high, low] = encodeRowCount(rowCount);
-  grid.push(high, low);
-  for (let i = 0; i < rowCount * 128; i += 1) {
-    grid.push(dataCells[i] ?? 0);
-  }
-  return grid;
+  return rows.flat();
 }
 
-function buildFrameGrid(headerAndPayload: Uint8Array, crcOverride?: number): CellGrid {
+function withCrc(headerAndPayload: Uint8Array, crcOverride?: number): Uint8Array {
   const crc = crcOverride ?? crc16(headerAndPayload);
   const full = new Uint8Array(headerAndPayload.length + 2);
   full.set(headerAndPayload, 0);
   full[headerAndPayload.length] = (crc >> 8) & 0xff;
   full[headerAndPayload.length + 1] = crc & 0xff;
-  return layoutGridCells(bytesToDataCells(full));
+  return full;
+}
+
+function buildFrameGrid(headerAndPayload: Uint8Array, crcOverride?: number): CellGrid {
+  return layoutGridCells(bytesToDataCells(withCrc(headerAndPayload, crcOverride)));
 }
 
 function frameHeader(
@@ -152,7 +154,7 @@ function frameHeader(
   return [
     magic1,
     magic2,
-    1,
+    2,
     (seq >> 8) & 0xff,
     seq & 0xff,
     total,
@@ -171,7 +173,7 @@ describe("codec.roundtrip", () => {
         runLuaEncoder(dir, size, 3);
         const frameCount = Number(readFileSync(join(dir, "meta.txt"), "utf8"));
         for (let index = 0; index < frameCount; index += 1) {
-          expect(readGrid(dir, index).length).toBeLessThanOrEqual(128 * 64);
+          expect(readGrid(dir, index).length).toBeLessThanOrEqual(3 * (16 + 928));
         }
         const payload = collectPayload(dir, frameCount);
         expect(payload.length).toBe(size);
@@ -197,18 +199,15 @@ describe("codec.roundtrip", () => {
     });
   });
 
-  it("decodes a 3-row frame from a full 8192-cell capture of the fixed grid region", () => {
+  it("lays a full 1024-byte frame across exactly three rows at 1920 wide", () => {
     withTempDir((dir) => {
-      runLuaEncoder(dir, 100, 4);
+      runLuaEncoder(dir, 1024, 4);
       const cells = readGrid(dir, 0);
-      const padded = cells.slice() as number[];
-      while (padded.length < 128 * 64) {
-        padded.push(3);
-      }
-      const result = decodeGrid(padded as CellGrid);
+      expect(cells.length).toBe(3 * (16 + 928));
+      const result = decodeGrid(cells);
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.payload.length).toBe(100);
+        expect(result.value.payload.length).toBe(1024);
       }
     });
   });
@@ -260,6 +259,105 @@ describe("codec.roundtrip", () => {
   });
 });
 
+type Feed = ReturnType<ReturnType<typeof createLineReader>["feed"]>;
+
+describe("codec.roundtrip through a rendered line image", () => {
+  const variants: readonly { name: string; options: RenderOptions }[] = [
+    { name: "clean line at the top-left", options: {} },
+    {
+      name: "cells drawn 2 px wide over the gap, line offset along the top edge",
+      options: {
+        offsetX: 20,
+        widen: (row, cell) => ((row + cell) % 3 === 0 ? 1 : cell % 5 === 0 ? -1 : 0),
+      },
+    },
+    { name: "line at the bottom edge", options: { edge: "bottom", offsetX: 5 } },
+    { name: "2560 px wide capture", options: { width: 2560, offsetX: 600 } },
+  ];
+
+  const noiseOnOneSample = [{ row: 0, cell: 20, sample: 0, value: 5 }] as const;
+
+  function decodeThroughImage(dir: string, frameCount: number, options: RenderOptions): Uint8Array {
+    const parts: Uint8Array[] = [];
+    for (let index = 0; index < frameCount; index += 1) {
+      const rows = paintedRowsFromFlat(readGrid(dir, index));
+      const reader = createLineReader();
+      const clean = renderLineCapture(rows, options);
+      const noisy = renderLineCapture(rows, { ...options, noise: noiseOnOneSample });
+      let reading: Feed | undefined;
+      for (const capture of [noisy, clean, clean]) {
+        reading = reader.feed(capture);
+      }
+      const frame = reading?.frame;
+      if (frame?.ok !== true) {
+        throw new Error(`frame ${String(index)} did not decode`);
+      }
+      parts.push(frame.value.payload);
+    }
+    return Uint8Array.from(parts.flatMap((part) => [...part]));
+  }
+
+  for (const variant of variants) {
+    for (const size of [0, 1, 500, 5000]) {
+      it(`${variant.name}: ${String(size)}-byte payload decodes to identical bytes`, () => {
+        withTempDir((dir) => {
+          runLuaEncoder(dir, size, 3);
+          const frameCount = Number(readFileSync(join(dir, "meta.txt"), "utf8"));
+          const payload = decodeThroughImage(dir, frameCount, variant.options);
+          expect(payload.length).toBe(size);
+          for (let i = 0; i < size; i += 1) {
+            expect(payload[i]).toBe(expectedByte(i));
+          }
+        });
+      });
+    }
+  }
+
+  it("a frame with one noisy sample on one cell decodes once later captures outvote it", () => {
+    withTempDir((dir) => {
+      runLuaEncoder(dir, 500, 3);
+      const rows = paintedRowsFromFlat(readGrid(dir, 0));
+      const reader = createLineReader();
+      const noisy = renderLineCapture(rows, {
+        noise: [
+          { row: 0, cell: 20, sample: 0, value: 5 },
+          { row: 0, cell: 20, sample: 1, value: 5 },
+        ],
+      });
+      const first = reader.feed(noisy);
+      expect(first.seen).toBe(true);
+      expect(first.frame?.ok).toBe(false);
+      const clean = renderLineCapture(rows);
+      const later = [reader.feed(clean), reader.feed(clean), reader.feed(clean)];
+      expect(later.some((reading) => reading.frame?.ok === true)).toBe(true);
+    });
+  });
+
+  it("takes the most frequent value per cell across captures when every capture has a bad cell", () => {
+    withTempDir((dir) => {
+      runLuaEncoder(dir, 500, 3);
+      const rows = paintedRowsFromFlat(readGrid(dir, 0));
+      const reader = createLineReader();
+      const badCell = (cell: number): RenderOptions => ({
+        noise: [
+          { row: 0, cell, sample: 0, value: 5 },
+          { row: 0, cell, sample: 1, value: 5 },
+        ],
+      });
+      const readings = [20, 30, 40].map((cell) =>
+        reader.feed(renderLineCapture(rows, badCell(cell))),
+      );
+      expect(readings.map((reading) => reading.frame?.ok)).toEqual([false, false, true]);
+    });
+  });
+
+  it("reports the line as unseen when there is no anchor", () => {
+    const reader = createLineReader();
+    const blank: LineCapture = renderLineCapture([], {});
+    expect(reader.feed(blank)).toEqual({ seen: false });
+  });
+});
+
 describe("codec.rejects", () => {
   function fixtureCells(): CellGrid {
     return withTempDir((dir) => {
@@ -271,7 +369,7 @@ describe("codec.rejects", () => {
   it("rejects a flipped payload bit as bad_frame via crc mismatch", () => {
     const cells = fixtureCells();
     const mutable = cells.slice() as number[];
-    const payloadCellIndex = 128 + 34;
+    const payloadCellIndex = 16 + 34;
     mutable[payloadCellIndex] = (mutable[payloadCellIndex] as number) ^ 1;
     const result = decodeGrid(mutable as CellGrid);
     expect(result.ok).toBe(false);
@@ -299,7 +397,7 @@ describe("codec.rejects", () => {
   it("rejects a wrong crc as bad_frame", () => {
     const cells = fixtureCells();
     const mutable = cells.slice() as number[];
-    const crcCellIndex = 128 + 55;
+    const crcCellIndex = 16 + 55;
     mutable[crcCellIndex] = ((mutable[crcCellIndex] as number) + 3) % 8;
     const result = decodeGrid(mutable as CellGrid);
     expect(result.ok).toBe(false);
@@ -320,7 +418,7 @@ describe("codec.rejects", () => {
 
   it("rejects a reassembled payload over 16 KB as too_large before the last frame arrives", () => {
     const makeFrame = (index: number, total: number, length: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 21,
       total,
       index,
@@ -340,7 +438,7 @@ describe("codec.rejects", () => {
 
   it("treats a repeated frame as a no-op that keeps the buffer", () => {
     const makeFrame = (index: number, total: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 30,
       total,
       index,
@@ -361,7 +459,7 @@ describe("codec.rejects", () => {
 
   it("keeps the first payload when a repeated index arrives with a different payload", () => {
     const makeFrame = (index: number, payload: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 33,
       total: 3,
       index,
@@ -388,7 +486,7 @@ describe("codec.rejects", () => {
   it("delivers a single-frame message only once despite repeated captures", () => {
     const json = '{"t":"hello","v":1,"build":"x","iface":1,"session":"s1","slot":1}';
     const frame: Frame = {
-      version: 1,
+      version: 2,
       seq: 50,
       total: 1,
       index: 0,
@@ -415,7 +513,7 @@ describe("codec.rejects", () => {
       bytes.slice(chunkSize * 2),
     ];
     const makeFrame = (index: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 51,
       total: 3,
       index,
@@ -435,14 +533,14 @@ describe("codec.rejects", () => {
 
   it("rejects a single-frame capture whose seq matches a pending multi-frame buffer as bad_frame", () => {
     const partial: Frame = {
-      version: 1,
+      version: 2,
       seq: 60,
       total: 3,
       index: 0,
       payload: new Uint8Array([1]),
     };
     const conflictingSingle: Frame = {
-      version: 1,
+      version: 2,
       seq: 60,
       total: 1,
       index: 0,
@@ -475,7 +573,7 @@ describe("codec.rejects", () => {
     payload[prefix.length] = 0xff;
     payload.set(suffix, prefix.length + 1);
     const frame: Frame = {
-      version: 1,
+      version: 2,
       seq: 71,
       total: 1,
       index: 0,
@@ -490,7 +588,7 @@ describe("codec.rejects", () => {
 
   it("rejects invalid UTF-8 in an otherwise CRC-valid payload as bad_frame", () => {
     const frame: Frame = {
-      version: 1,
+      version: 2,
       seq: 70,
       total: 1,
       index: 0,
@@ -505,7 +603,7 @@ describe("codec.rejects", () => {
 
   it("accepts a reassembled payload at exactly 16 KB and rejects one byte over", () => {
     const makeFrame = (index: number, total: number, length: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 22,
       total,
       index,
@@ -541,7 +639,7 @@ describe("codec.rejects", () => {
       bytes.slice(chunkSize * 2),
     ];
     const makeFrame = (index: number): Frame => ({
-      version: 1,
+      version: 2,
       seq: 31,
       total: 3,
       index,
@@ -570,7 +668,7 @@ describe("codec.rejects", () => {
     }
   });
 
-  it("rejects a corrupted sync pattern cell as bad_frame", () => {
+  it("rejects a corrupted anchor cell as bad_frame", () => {
     const cells = fixtureCells();
     const mutable = cells.slice() as number[];
     mutable[5] = (mutable[5] as number) ^ 1;
@@ -579,33 +677,88 @@ describe("codec.rejects", () => {
     if (!result.ok) expect(result.error).toBe("bad_frame");
   });
 
-  it("rejects a row count of zero as bad_frame", () => {
-    const cells = fixtureCells();
-    const mutable = cells.slice() as number[];
-    mutable[126] = 0;
-    mutable[127] = 0;
-    const result = decodeGrid(mutable as CellGrid);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe("bad_frame");
+  function twoRowStream(): { flat: number[]; rowLength: number } {
+    const header = frameHeader(0x57, 0x43, 8, 1, 0, 400);
+    const bytes = new Uint8Array([...header, ...Array.from<number>({ length: 400 }).fill(9)]);
+    const rows = layoutRows(bytesToDataCells(withCrc(bytes)), 600);
+    if (rows === undefined || rows.length !== 2) throw new Error("fixture must be two rows");
+    return { flat: rows.flat(), rowLength: 16 + 600 };
+  }
+
+  function countDigits(count: number): number[] {
+    return [3, 2, 1, 0].map((place) => Math.floor(count / 8 ** place) % 8);
+  }
+
+  it("rejects a row whose cell count is zero (count guard, nothing else to trip)", () => {
+    const anchorAndZeroCount = [...fixtureCells().slice(0, 12), 0, 0, 0, 0] as CellGrid;
+    const split = splitPaintedRows(anchorAndZeroCount);
+    expect(split.ok).toBe(false);
   });
 
-  it("rejects a row count that does not match the header-derived cell count", () => {
+  it("rejects a row that claims more cells than were drawn (row end guard)", () => {
     const cells = fixtureCells();
-    const mutable = cells.slice() as number[];
-    mutable[126] = 0;
-    mutable[127] = 2;
-    for (let i = 0; i < 128; i += 1) {
-      mutable.push(0);
-    }
-    const result = decodeGrid(mutable as CellGrid);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe("bad_frame");
+    const split = splitPaintedRows(cells.slice(0, cells.length - 1));
+    expect(split.ok).toBe(false);
+    expect(splitPaintedRows(cells).ok).toBe(true);
+  });
+
+  it("rejects a second row whose own cell count differs from the first (count agreement guard)", () => {
+    const { flat, rowLength } = twoRowStream();
+    expect(splitPaintedRows(flat as CellGrid).ok).toBe(true);
+    const shorter = [
+      ...flat.slice(0, rowLength + 12),
+      ...countDigits(599),
+      ...flat.slice(rowLength + 16, flat.length - 1),
+    ];
+    expect(shorter.length).toBe(rowLength + 16 + 599);
+    expect(splitPaintedRows(shorter as CellGrid).ok).toBe(false);
+  });
+
+  it("rejects a second row that lacks the anchor (anchor guard, counts intact)", () => {
+    const { flat, rowLength } = twoRowStream();
+    const broken = flat.slice();
+    broken[rowLength + 3] = (broken[rowLength + 3] as number) ^ 1;
+    expect(splitPaintedRows(broken as CellGrid).ok).toBe(false);
+  });
+
+  it("rejects rows of unequal length handed straight to the frame decoder", () => {
+    const rows = layoutRows([1, 2, 3, 4], 2);
+    if (rows === undefined) throw new Error("fixture");
+    const uneven = [rows[0] as CellGrid, (rows[0] as CellGrid).slice(0, 10)];
+    const data = uneven.map((row) => row.slice(16));
+    expect(decodeRows(data).ok).toBe(false);
+    expect(decodeRows([]).ok).toBe(false);
+  });
+
+  it("rejects a fourth row as bad_frame", () => {
+    const rows = layoutRows([1, 2, 3], 1);
+    if (rows === undefined) throw new Error("fixture");
+    const four = [...rows, ...rows, ...rows, ...rows].flat();
+    expect(decodeGrid(four).ok).toBe(false);
+  });
+
+  it("rejects the previous codec version as bad_frame even for a valid message", () => {
+    const body = new TextEncoder().encode('{"t":"state","seq":1,"delta":{}}');
+    const header = frameHeader(0x57, 0x43, 5, 1, 0, body.length);
+    header[2] = 1;
+    const grid = buildFrameGrid(new Uint8Array([...header, ...body]));
+    const decoded = decodeGrid(grid);
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) throw new Error("unreachable");
+    expect(decoded.value.version).toBe(1);
+    const step = reassemble(undefined, decoded.value);
+    expect(step.message?.ok).toBe(false);
+    if (step.message?.ok === false) expect(step.message.error).toBe("bad_frame");
+    header[2] = 2;
+    const current = decodeGrid(buildFrameGrid(new Uint8Array([...header, ...body])));
+    if (!current.ok) throw new Error("unreachable");
+    expect(reassemble(undefined, current.value).message?.ok).toBe(true);
   });
 
   it("rejects a frame whose seq matches the buffer but whose total does not", () => {
-    const first: Frame = { version: 1, seq: 40, total: 3, index: 0, payload: new Uint8Array([1]) };
+    const first: Frame = { version: 2, seq: 40, total: 3, index: 0, payload: new Uint8Array([1]) };
     const conflicting: Frame = {
-      version: 1,
+      version: 2,
       seq: 40,
       total: 5,
       index: 0,

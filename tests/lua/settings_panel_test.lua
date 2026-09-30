@@ -1,7 +1,17 @@
 dofile("tests/lua/wow_stubs.lua")
 
 local ns = {}
+local linePosition = "top"
+local linePositionCalls = {}
 ns.Transport = { sent = {}, handlers = {} }
+function ns.Transport.linePosition()
+  return linePosition
+end
+function ns.Transport.setLinePosition(position)
+  table.insert(linePositionCalls, position)
+  linePosition = position
+  return true
+end
 function ns.Transport.send(msg)
   table.insert(ns.Transport.sent, msg)
 end
@@ -499,6 +509,25 @@ assert(textSizeInitializer.setting:GetValue() == "normal", "the dropdown shows t
 assert(textSizeInitializer.setting.defaultValue == "normal", "Normal is the registered default")
 assert(textSizeInitializer:PickMenuEntry("large") == true, "a size can be picked")
 assert(textSizeCalls[#textSizeCalls] == "large", "picking a size applies it through ns.AiWindow.setTextSize")
+
+local lineInitializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS["WOWC_LINE_POSITION"]
+assert(lineInitializer ~= nil and lineInitializer.kind == "dropdown", "Signal line position is a dropdown in the settings category")
+assert(lineInitializer.setting.name == "Signal line position", "the dropdown is labelled Signal line position")
+assert(lineInitializer.tooltip ~= nil and lineInitializer.tooltip ~= "", "Signal line position carries a tooltip")
+assert(lineInitializer.tooltip == "The thin line that sends game data to the companion is normally invisible and only blinks while a message is being sent. Move it if another addon or overlay covers it.", "the tooltip is written from the player's view")
+local lineLabels = {}
+for _, option in ipairs(lineInitializer:GetOptions()) do
+  table.insert(lineLabels, option.label)
+  assert(option.controlType == Settings.ControlType.Radio, "line position options are radio entries")
+end
+assert(table.concat(lineLabels, ",") == "Top edge,Bottom edge", "the choices are Top edge, Bottom edge in that order")
+assert(lineInitializer.setting.defaultValue == "top", "Top is the registered default")
+assert(lineInitializer.setting:GetValue() == "top", "the dropdown shows the position in use")
+assert(lineInitializer:PickMenuEntry("bottom") == true, "a position can be picked")
+assert(linePositionCalls[#linePositionCalls] == "bottom", "picking a position applies it through ns.Transport.setLinePosition")
+assert(lineInitializer.setting:GetValue() == "bottom", "the dropdown follows the position the transport now holds")
+lineInitializer:PickMenuEntry("top")
+assert(linePosition == "top" and lineInitializer.setting:GetValue() == "top", "and back to Top")
 
 local minimapInitializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS["WOWC_MINIMAP"]
 assert(minimapInitializer ~= nil and minimapInitializer.kind == "checkbox", "Show minimap button is a checkbox in the settings category")

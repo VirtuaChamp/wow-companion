@@ -432,9 +432,12 @@ function parseItemsMessage(
 function parseCmdMessage(
   value: Record<string, unknown>,
 ): Extract<GameToCompanion, { t: "cmd" }> | undefined {
-  if (!isString(value.chat) || !isOneOf(value.name, cmdNames)) return undefined;
+  if (!isString(value.id) || !isString(value.chat) || !isOneOf(value.name, cmdNames)) {
+    return undefined;
+  }
   const msg: Extract<GameToCompanion, { t: "cmd" }> = {
     t: "cmd",
+    id: value.id,
     chat: value.chat,
     name: value.name,
   };

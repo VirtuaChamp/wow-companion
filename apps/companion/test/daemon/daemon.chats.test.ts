@@ -44,7 +44,7 @@ describe("daemon.chats", () => {
   it("cmd new mints an id, names the chat, then sends chats, history and options", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Second" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Second" });
     const sent = (await waitForSent(harness.link, 6)).slice(3);
 
     expect(sent.map((msg) => msg.t)).toEqual(["chats", "history", "options"]);
@@ -57,7 +57,7 @@ describe("daemon.chats", () => {
   it("cmd new without an arg names the chat Chat <n+1>", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "new" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new" });
     const sent = (await waitForSent(harness.link, 6)).slice(3);
 
     if (sent[0]?.t !== "chats") throw new Error("expected chats");
@@ -66,10 +66,10 @@ describe("daemon.chats", () => {
 
   it("cmd open re-sends chats, history and options when the active chat changes", async () => {
     const harness = await connected();
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Second" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Second" });
     await waitForSent(harness.link, 6);
 
-    harness.link.push({ t: "cmd", chat: "default", name: "open" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "open" });
     const sent = (await waitForSent(harness.link, 9)).slice(6);
 
     expect(sent.map((msg) => msg.t)).toEqual(["chats", "history", "options"]);
@@ -80,7 +80,7 @@ describe("daemon.chats", () => {
   it("cmd open on the already active chat sends chats and history but no options", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "open" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "open" });
     const sent = (await waitForSent(harness.link, 5)).slice(3);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -91,12 +91,12 @@ describe("daemon.chats", () => {
   it("cmd rename and reset update the chat and answer with chats", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "rename", arg: "Renamed" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "rename", arg: "Renamed" });
     const renamed = (await waitForSent(harness.link, 4)).at(-1);
     if (renamed?.t !== "chats") throw new Error("expected chats");
     expect(renamed.list[0]?.name).toBe("Renamed");
 
-    harness.link.push({ t: "cmd", chat: "default", name: "reset" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "reset" });
     const sent = (await waitForSent(harness.link, 6)).slice(4);
     expect(sent.map((msg) => msg.t)).toEqual(["chats", "history"]);
   });
@@ -104,7 +104,7 @@ describe("daemon.chats", () => {
   it("cmd rename without an arg changes nothing", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "rename" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "rename" });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(harness.link.sent()).toHaveLength(3);
@@ -113,7 +113,7 @@ describe("daemon.chats", () => {
   it("deleting the last chat seeds a fresh default chat", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "default", name: "delete" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "delete" });
     const sent = (await waitForSent(harness.link, 5)).slice(3);
 
     expect(sent.map((msg) => msg.t)).toEqual(["chats", "history"]);
@@ -125,8 +125,8 @@ describe("daemon.chats", () => {
   it("ignores a command on a chat it does not have", async () => {
     const harness = await connected();
 
-    harness.link.push({ t: "cmd", chat: "ghost", name: "open" });
-    harness.link.push({ t: "cmd", chat: "ghost", name: "delete" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "ghost", name: "open" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "ghost", name: "delete" });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(harness.link.sent()).toHaveLength(3);
@@ -135,7 +135,7 @@ describe("daemon.chats", () => {
   it("answers busy with the ask id for a second ask on a running chat and runs another chat in parallel", async () => {
     const blocked = blockedProvider();
     const harness = await connected({ providers: new Map([["claude", blocked.provider]]) });
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Second" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Second" });
     await waitForSent(harness.link, 6);
 
     harness.link.push({ t: "ask", id: "a1", chat: "default", text: "one", mentions: [] });
@@ -159,7 +159,7 @@ describe("daemon.chats", () => {
 
     harness.link.push({ t: "ask", id: "a1", chat: "default", text: "one", mentions: [] });
     await waitForSent(harness.link, 4);
-    harness.link.push({ t: "cmd", chat: "default", name: "cancel" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "cancel" });
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const errors = harness.link.sent().filter((msg) => msg.t === "error");
@@ -174,7 +174,7 @@ describe("daemon.chats", () => {
 
     harness.link.push({ t: "ask", id: "a1", chat: "default", text: "one", mentions: [] });
     await waitForSent(harness.link, 4);
-    harness.link.push({ t: "cmd", chat: "default", name: "delete" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "delete" });
     await waitForSent(harness.link, 5);
 
     expect(harness.link.sent().at(-1)).toMatchObject({ t: "error", code: "busy" });

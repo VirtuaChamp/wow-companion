@@ -53,17 +53,23 @@ ns.Core.dispatch({ t = "error", id = "ask-b", chat = "B", code = "provider_faile
 assert(displays() == transcript, "a failure of a background chat leaves the shown transcript alone")
 
 ns.Core.dispatch({ t = "error", id = "ask-a", chat = "A", code = "provider_failed", message = "x" })
-assert(displays() == transcript .. "|[Claude] error: provider_failed", "a failure of the shown chat is printed in it")
+assert(displays() == transcript .. "|[Claude] error: x", "a failure of the shown chat is printed in it")
 
 ns.Core.dispatch({ t = "error", code = "bad_settings", message = "refused" })
-assert(displays():find("bad_settings", 1, true) ~= nil, "an error without a chat is printed where the player is")
+ns.Core.dispatch({ t = "error", id = "ask-d", chat = "A", code = "daemon_error", message = "the companion could not apply this message" })
+assert(displays():find("the companion could not handle that message; try again.", 1, true) ~= nil, "a daemon_error is shown as its own readable line")
+ns.Core.dispatch({ t = "error", code = "unheard_of", message = "a readable reason" })
+assert(displays():find("[Claude] error: a readable reason", 1, true) ~= nil, "a code without a line shows the message the companion sent")
+ns.Core.dispatch({ t = "error", code = "unheard_of" })
+assert(displays():find("[Claude] error: unheard_of", 1, true) ~= nil, "and with no message it shows the code")
+assert(displays():find("refused", 1, true) ~= nil, "an error without a chat is printed where the player is")
 
 local rowsNow = rows()
 rowsNow.B:Fire("OnClick", "LeftButton")
-assert(displays() == "in B|[Claude] error: provider_failed", "switching to that chat shows its failure after its messages")
+assert(displays() == "in B|[Claude] error: x", "switching to that chat shows its failure after its messages")
 
 ns.Core.dispatch({ t = "history", chat = "B", lines = { { who = "you", text = "in B", at = 1 }, { who = "claude", text = "later", at = 2 } } })
-assert(displays():find("[Claude] error: provider_failed", 1, true) ~= nil, "a history that replaces the cache keeps the failure notice")
+assert(displays():find("[Claude] error: x", 1, true) ~= nil, "a history that replaces the cache keeps the failure notice")
 
 rowsNow.A:Fire("OnClick", "LeftButton")
 ns.Core.dispatch({ t = "error", id = "busy-c", chat = "C", code = "busy", message = "busy" })
@@ -98,7 +104,7 @@ rows().A:Fire("OnClick", "LeftButton")
 rows().B:Fire("OnClick", "LeftButton")
 local count = 0
 for _, entry in ipairs(ns.AiWindow.entries()) do
-  if entry.display == "[Claude] error: provider_failed" then
+  if entry.display == "[Claude] error: x" then
     count = count + 1
   end
 end

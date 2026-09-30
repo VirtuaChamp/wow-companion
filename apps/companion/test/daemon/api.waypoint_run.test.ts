@@ -63,7 +63,7 @@ describe("api.waypoint_run", () => {
 
     harness.link.push(hello());
     harness.link.push({ t: "state", seq: 1, delta: makeSnapshot() });
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Second" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Second" });
     await waitForSent(harness.link, 6);
     const chatsMessages = harness.link.sent().filter((msg) => msg.t === "chats");
     const last = chatsMessages[chatsMessages.length - 1];

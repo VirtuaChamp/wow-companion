@@ -6,9 +6,11 @@ import type {
   Result,
 } from "@wow-companion/contracts";
 import type { FrameBuffer } from "./codec.ts";
-import { decodeGrid, reassemble } from "./codec.ts";
+import { CODEC_VERSION, reassemble } from "./codec.ts";
 import type { FrameSource } from "./capture.ts";
-import { GRID_SYNC_PATTERN_CELLS, syncRowCell } from "./grid.ts";
+import { createHandledIds } from "./handled-ids.ts";
+import type { HandledIds } from "./handled-ids.ts";
+import { createLineReader } from "./line-reader.ts";
 import {
   SLOT_COUNT,
   controlGoneFile,
@@ -91,6 +93,8 @@ export type ScreenLinkConfig = {
   pollIntervalMs?: number;
   autopoll?: boolean;
   onCaptureError?: (error: unknown) => void;
+  log?: (line: string) => void;
+  handledIds?: HandledIds;
   slotReadMs?: number;
   connectedTimeoutMs?: number;
   delay?: (ms: number) => Promise<void>;
@@ -98,18 +102,25 @@ export type ScreenLinkConfig = {
 };
 
 export type ScreenLink = GameLink & {
+  committed(msg: GameToCompanion): Promise<boolean>;
+  release(msg: GameToCompanion): void;
   close(): void;
   idle(): Promise<void>;
   poll(): Promise<void>;
 };
 
-const DEFAULT_POLL_INTERVAL_MS = 150;
+const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_SLOT_READ_MS = 250;
-const DEFAULT_CONNECTED_TIMEOUT_MS = 5000;
+const DEFAULT_CONNECTED_TIMEOUT_MS = 25_000;
+const UNDECODABLE_LOG_INTERVAL_MS = 30_000;
 const SESSION_LENGTH = 17;
 
 function defaultDelay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function handledKeyOf(msg: GameToCompanion): string | undefined {
+  return msg.t === "ask" || msg.t === "cmd" ? `${msg.t}:${msg.id}` : undefined;
 }
 
 function isAck(msg: CompanionToGame): msg is Extract<CompanionToGame, { t: "ack" }> {
@@ -135,7 +146,13 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   const now = config.now ?? (() => Date.now());
 
   const queue = createAsyncQueue();
-  let frameBuf: FrameBuffer;
+  const lineReader = createLineReader();
+  let lastUndecodableLogAt: number | undefined;
+  let versionMismatchLogged = false;
+  const handledIds = config.handledIds ?? createHandledIds([]);
+  const awaitingCommit = new Map<string, { session: string; seqs: number[] }>();
+  let singleBuf: FrameBuffer;
+  let multiBuf: FrameBuffer;
   let helloSeen = false;
   let build: string | undefined;
   let session = "";
@@ -143,6 +160,13 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   let lastFrameAt: number | undefined;
   const allocator: SlotAllocator = createSlotAllocator(slotCount);
   const pending: CompanionToGame[] = [];
+  const ackSessions = new WeakMap<CompanionToGame, string>();
+
+  function ack(seq: number, atSession: string = session): CompanionToGame {
+    const made: CompanionToGame = { t: "ack", seq };
+    ackSessions.set(made, atSession);
+    return made;
+  }
   let held: CompanionToGame[] = [];
   let written: WrittenEntry[] = [];
   let awaitingPostAckFrame = false;
@@ -152,6 +176,13 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   let flushing: Promise<void> | undefined;
   let closed = false;
   let controlCleared = false;
+
+  function logVersionMismatch(): void {
+    if (!versionMismatchLogged) {
+      versionMismatchLogged = true;
+      config.log?.("addon and companion versions differ, run setup and restart the game");
+    }
+  }
 
   function sizingSession(): string {
     return session.length >= SESSION_LENGTH ? session : "x".repeat(SESSION_LENGTH);
@@ -243,6 +274,10 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     let batchBytes = 0;
     while (pending.length > 0) {
       const next = pending[0] as CompanionToGame;
+      if (isAck(next) && ackSessions.get(next) !== session) {
+        pending.shift();
+        continue;
+      }
       const size = messageByteSize(session, next);
       if (batch.length > 0 && batchBytes + size > 64 * 1024) {
         break;
@@ -309,13 +344,21 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       build = msg.build;
       helloSeen = true;
       if (!isAgain) {
-        pending.unshift({ t: "ack", seq: frameSeq });
+        pending.unshift(ack(frameSeq));
         scheduleFlush();
       }
       return;
     }
 
     resyncing = true;
+    if (isNewSession) {
+      awaitingCommit.clear();
+      for (let i = pending.length - 1; i >= 0; i -= 1) {
+        if (isAck(pending[i] as CompanionToGame)) {
+          pending.splice(i, 1);
+        }
+      }
+    }
     while (flushing !== undefined) {
       await flushing;
     }
@@ -339,7 +382,7 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       }
       if (outcome === "recovered") {
         emptiedAfterFailure = { session: msg.session, floor: targetIndex };
-        frameBuf = isAgain ? { seq: frameSeq, complete: true } : undefined;
+        singleBuf = isAgain ? { seq: frameSeq, complete: true } : undefined;
         return;
       }
       nextIndex = targetIndex;
@@ -353,16 +396,20 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
 
     build = msg.build;
     session = msg.session;
+    if (isNewSession) {
+      awaitingCommit.clear();
+    }
     helloSeen = true;
     allocator.setNext(nextIndex);
     exhaustedUntilResync = false;
     if (isNewSession) {
-      frameBuf = { seq: frameSeq, complete: true };
+      singleBuf = { seq: frameSeq, complete: true };
+      multiBuf = undefined;
     }
     if (isAgain) {
       releaseHeld();
     } else {
-      pending.push({ t: "ack", seq: frameSeq });
+      pending.push(ack(frameSeq));
       awaitingPostAckFrame = true;
     }
     resyncing = false;
@@ -380,45 +427,90 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
     if (grid === undefined) {
       return;
     }
-    let sync = true;
-    for (let i = 0; i < GRID_SYNC_PATTERN_CELLS; i += 1) {
-      if (grid[i] !== syncRowCell(i)) {
-        sync = false;
-        break;
-      }
-    }
-    if (!sync) {
+    const reading = lineReader.feed(grid);
+    if (reading.legacyGrid === true) {
+      badFrames += 1;
+      logVersionMismatch();
       return;
     }
-    const frame = decodeGrid(grid);
+    if (!reading.seen || reading.frame === undefined) {
+      return;
+    }
+    const frame = reading.frame;
     if (!frame.ok) {
       badFrames += 1;
+      const at = now();
+      if (
+        lastUndecodableLogAt === undefined ||
+        at - lastUndecodableLogAt >= UNDECODABLE_LOG_INTERVAL_MS
+      ) {
+        lastUndecodableLogAt = at;
+        config.log?.("the signal line is visible but no frame decodes; check the video settings");
+      }
+      return;
+    }
+    if (frame.value.version !== CODEC_VERSION) {
+      badFrames += 1;
+      logVersionMismatch();
       return;
     }
     lastFrameAt = now();
     const frameSeq = frame.value.seq;
-    const { buf, message } = reassemble(frameBuf, frame.value);
-    frameBuf = buf;
+    const isSingleFrame = frame.value.total === 1;
+    if (!isSingleFrame && singleBuf?.complete === true) {
+      singleBuf = undefined;
+    }
+    const { buf, message } = reassemble(isSingleFrame ? singleBuf : multiBuf, frame.value);
+    const keepBuffer = (): void => {
+      if (isSingleFrame) {
+        singleBuf = buf;
+      } else {
+        multiBuf = buf;
+      }
+    };
     if (message === undefined) {
+      keepBuffer();
       return;
     }
     if (!message.ok) {
+      keepBuffer();
       badFrames += 1;
       return;
     }
     const msg = message.value;
+    if (isSingleFrame && !(msg.t === "hello" && msg.again === true)) {
+      multiBuf = undefined;
+    }
+    keepBuffer();
+    const key = handledKeyOf(msg);
     const showsAckWasRead = awaitingPostAckFrame && !(msg.t === "hello" && msg.again !== true);
+    let deliver = true;
     if (msg.t === "hello") {
       await handleHello(msg, frameSeq);
+    } else if (key !== undefined) {
+      const found = awaitingCommit.get(key);
+      const waiting = found?.session === session ? found : undefined;
+      if (handledIds.has(key)) {
+        pending.push(ack(frameSeq));
+        scheduleFlush();
+        deliver = false;
+      } else if (waiting !== undefined) {
+        waiting.seqs.push(frameSeq);
+        deliver = false;
+      } else {
+        awaitingCommit.set(key, { session, seqs: [frameSeq] });
+      }
     } else if (ACKED_TYPES.has(msg.t)) {
-      pending.push({ t: "ack", seq: frameSeq });
+      pending.push(ack(frameSeq));
       scheduleFlush();
     }
     if (showsAckWasRead) {
       releaseHeld();
       scheduleFlush();
     }
-    queue.push(msg);
+    if (deliver) {
+      queue.push(msg);
+    }
   }
 
   async function clearControlGone(): Promise<void> {
@@ -474,6 +566,41 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
       target.push(msg);
       scheduleFlush();
       return { ok: true, value: undefined };
+    },
+    async committed(msg: GameToCompanion): Promise<boolean> {
+      const key = handledKeyOf(msg);
+      if (key === undefined) {
+        return true;
+      }
+      const entry = awaitingCommit.get(key);
+      const recorded = await handledIds.remember(key);
+      if (!recorded.ok) {
+        config.log?.("could not record the id of a handled message, retrying");
+        return false;
+      }
+      if (entry === undefined || awaitingCommit.get(key) !== entry || entry.session !== session) {
+        return true;
+      }
+      for (const seq of entry.seqs) {
+        pending.push(ack(seq, entry.session));
+      }
+      awaitingCommit.delete(key);
+      scheduleFlush();
+      return true;
+    },
+    release(msg: GameToCompanion): void {
+      const key = handledKeyOf(msg);
+      const entry = key === undefined ? undefined : awaitingCommit.get(key);
+      if (key === undefined || entry === undefined) {
+        return;
+      }
+      awaitingCommit.delete(key);
+      if (singleBuf !== undefined && entry.seqs.includes(singleBuf.seq)) {
+        singleBuf = undefined;
+      }
+      if (multiBuf !== undefined && entry.seqs.includes(multiBuf.seq)) {
+        multiBuf = undefined;
+      }
     },
     status(): { connected: boolean; build?: string; slotsLeft: number; badFrames: number } {
       const connected =

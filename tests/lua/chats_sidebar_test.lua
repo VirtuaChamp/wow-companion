@@ -76,6 +76,10 @@ first:Fire("OnClick", "LeftButton")
 assert(#ns.Transport.sent == 1, "left-click sends one command")
 assert(ns.Transport.sent[1].t == "cmd" and ns.Transport.sent[1].name == "open", "left-click sends open")
 assert(ns.Transport.sent[1].chat == "chat-2", "open targets the clicked chat")
+local firstCmdId = ns.Transport.sent[1].id
+assert(type(firstCmdId) == "string" and firstCmdId:find("^cmd%-") ~= nil, "every cmd carries an id the companion can de-duplicate by")
+first:Fire("OnClick", "LeftButton")
+assert(ns.Transport.sent[2].id ~= firstCmdId, "two cmds never share an id")
 
 ns.Transport.sent = {}
 _G.WOWC_TEST_LAST_CONTEXT_MENU = nil

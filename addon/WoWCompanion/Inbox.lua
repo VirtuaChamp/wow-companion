@@ -3,11 +3,31 @@ local _, ns = ...
 ns.Transport = ns.Transport or {}
 
 local REPAINT_INTERVAL_SECONDS = 0.25
-local HOLD_CYCLES = 3
 local QUEUE_CAP = 8
 local SLOT_COUNT = 200
 local SLOT_WARNING_THRESHOLD = 20
 local HELLO_INTERVAL_SECONDS = 10
+local FRAME_HOLD_MIN_SECONDS = 0.2
+local UNREADABLE_LINE_AFTER_SECONDS = 20
+local STALLED_AFTER_SECONDS = 30
+local CHAT_PREFIX = "WoW Companion: "
+local STALLED_MESSAGE = "the companion isn't answering; your message is still waiting."
+local BUSY_MESSAGE = "busy, not sent"
+local UNREADABLE_LINE_MESSAGE = CHAT_PREFIX .. "can't read its signal line. Show the interface (Alt+Z) if it is hidden."
+local UNREADABLE_LINE_HINT = CHAT_PREFIX
+  .. "turn off anti-aliasing and screen overlays and set render scale to 100% in Options > Graphics, "
+  .. "or move the line in Options > AddOns > WoW Companion."
+local PLAIN_NAMES = {
+  ask = "your question",
+  cmd = "a chat command",
+  items = "item details",
+  state = "some game data",
+}
+
+local function plainName(kind)
+  return PLAIN_NAMES[kind] or "a message"
+end
+
 local ACKED_TYPES = { ask = true, items = true, cmd = true, hello = true }
 
 local function computeEntropyMix()
@@ -36,6 +56,11 @@ local slotFailWarned = {}
 local helloSeqsInFlight = {}
 local helloAckedHandlers = {}
 local tooLargeWarned = {}
+local helloUnackedSince = GetTime()
+local unreadableWarned = false
+local companionSeenSince = nil
+local lineShown = false
+local helloPending = false
 
 local function slotAddonName(index)
   return ("WoWCompanion_R%03d"):format(index)
@@ -92,21 +117,22 @@ local function fireOnMessage(msg)
   end
 end
 
-local function paintCurrentFrame()
-  if not current then
-    return
+local function notify(text)
+  if ns.AiWindow and ns.AiWindow.notice then
+    ns.AiWindow.notice("[Claude] " .. text)
+  else
+    print(CHAT_PREFIX .. text)
   end
-  local frame = current.frames[current.frameIndex]
-  local cells = ns.Codec.render(frame)
-  ns.Codec.paint(cells)
 end
 
-local function startCurrent(entry)
-  current = entry
-  current.frameIndex = 1
-  current.cyclesCompleted = 0
-  paintCurrentFrame()
+local function hideLine()
+  lineShown = false
+  ns.Codec.hide()
 end
+
+local startNextOrHide
+local finishCurrent
+local buildHelloEntry
 
 local function nextSeq()
   local seq = nextFrameSeq
@@ -114,11 +140,101 @@ local function nextSeq()
   return seq
 end
 
+local function paintFrame(entry)
+  local ok, err = ns.Codec.paint(ns.Codec.render(entry.frames[entry.frameIndex]))
+  if ok == nil and err ~= nil then
+    return false, err
+  end
+  return true
+end
+
+local function reencodeCurrent()
+  local seq = nextSeq()
+  local frames = ns.Codec.encode(current.msg, seq)
+  if not frames then
+    return false
+  end
+  current.oldSeqs = current.oldSeqs or {}
+  current.oldSeqs[current.seq] = true
+  current.seq = seq
+  current.frames = frames
+  current.frameIndex = 1
+  return true
+end
+
+local function paintCurrentFrame()
+  if not current then
+    return
+  end
+  if not signalsTrusted or current.dormant then
+    hideLine()
+    return
+  end
+  local shown, err = paintFrame(current)
+  if not shown and err == "too_large" and current.msg and reencodeCurrent() then
+    shown, err = paintFrame(current)
+  end
+  if not shown then
+    hideLine()
+    if err == "too_large" and not current.neverGivesUp then
+      local what = "line:" .. tostring(current.t)
+      if not tooLargeWarned[what] then
+        tooLargeWarned[what] = true
+        print(
+          CHAT_PREFIX
+            .. plainName(current.t)
+            .. " was not sent, it is too large for the signal line at this screen size"
+        )
+      end
+      finishCurrent()
+    end
+    return
+  end
+  lineShown = true
+  current.paintedAt = GetTime()
+end
+
+local function startCurrent(entry)
+  current = entry
+  current.startedAt = GetTime()
+  current.frameIndex = 1
+  paintCurrentFrame()
+end
+
+function startNextOrHide()
+  if helloPending then
+    helloPending = false
+    local hello = buildHelloEntry(true)
+    if hello then
+      startCurrent(hello)
+      return
+    end
+  end
+  local nextEntry = table.remove(sendQueue, 1)
+  if nextEntry then
+    startCurrent(nextEntry)
+  else
+    hideLine()
+  end
+end
+
+function finishCurrent()
+  local finished = current
+  current = nil
+  if finished and finished.resume then
+    current = finished.resume
+    current.frameIndex = 1
+    paintCurrentFrame()
+  else
+    startNextOrHide()
+  end
+end
+
 local function registerHelloSeq(seq)
   helloSeqsInFlight[seq] = true
 end
 
-local function buildHelloEntry(again)
+function buildHelloEntry(again)
   local version, build, _, tocversion = GetBuildInfo()
   local tbl = {
     t = "hello",
@@ -148,26 +264,30 @@ local function tryAck(seq)
   if not current then
     return
   end
+  local resumed = current.resume
+  if resumed and (resumed.seq == seq or (resumed.oldSeqs and resumed.oldSeqs[seq])) then
+    current.resume = nil
+    return
+  end
   if current.t == "hello" then
     if current.again or not helloSeqsInFlight[seq] then
       return
     end
-  elseif current.seq ~= seq then
+  elseif current.seq ~= seq and not (current.oldSeqs and current.oldSeqs[seq]) then
     return
   end
   local wasHello = current.t == "hello"
   helloSeqsInFlight = {}
   current = nil
-  local nextEntry = table.remove(sendQueue, 1)
-  if nextEntry then
-    startCurrent(nextEntry)
-  end
+  startNextOrHide()
   if wasHello then
+    helloUnackedSince = nil
+    unreadableWarned = false
     checkSignalsTrusted()
     for i = 1, #helloAckedHandlers do
       local ok, err = pcall(helloAckedHandlers[i])
       if not ok then
-        print("WoW Companion: hello handler error: " .. tostring(err))
+        print(CHAT_PREFIX .. "a connection setup step failed: " .. tostring(err))
       end
     end
   end
@@ -188,7 +308,7 @@ function WoWCompanion_Deliver(deliverySession, msgs)
     if msg.t ~= "ack" then
       local ok, err = pcall(fireOnMessage, msg)
       if not ok then
-        print("WoW Companion: message handler error: " .. tostring(err))
+        print(CHAT_PREFIX .. "a message from the companion could not be handled: " .. tostring(err))
       end
     end
   end
@@ -247,6 +367,9 @@ function ns.Transport.send(tbl)
   if tbl.t ~= "state" then
     local queued = #sendQueue + (current and 1 or 0)
     if queued >= QUEUE_CAP then
+      if tbl.t == "cmd" or tbl.t == "items" then
+        notify(BUSY_MESSAGE)
+      end
       return nil, "busy"
     end
   end
@@ -260,7 +383,7 @@ function ns.Transport.send(tbl)
       local what = describeTooLarge(tbl)
       if not tooLargeWarned[what] then
         tooLargeWarned[what] = true
-        print(("WoW Companion: %s not sent, too large for the transport"):format(what))
+        print(CHAT_PREFIX .. plainName(tbl.t) .. " was not sent, it is too large for the signal line")
       end
     end
     return nil, err
@@ -278,25 +401,49 @@ function ns.Transport.onHelloAcked(fn)
   table.insert(helloAckedHandlers, fn)
 end
 
+function ns.Transport.setLinePosition(position)
+  return ns.Codec.setPosition(position)
+end
+
+function ns.Transport.linePosition()
+  return ns.Codec.position()
+end
+
 function ns.Transport.onMessage(fn)
   table.insert(messageHandlers, fn)
 end
 
 local function advanceOrHandoff()
-  local nextEntry = table.remove(sendQueue, 1)
-  current = nil
-  if nextEntry then
-    startCurrent(nextEntry)
-  end
+  finishCurrent()
 end
 
 local function repaintTick()
-  if current then
+  local held = current and current.paintedAt and GetTime() - current.paintedAt or math.huge
+  if current and (not signalsTrusted or current.dormant) then
+    if lineShown then
+      hideLine()
+    end
+  elseif current and not lineShown then
+    paintCurrentFrame()
+  elseif current and current.blink and held >= FRAME_HOLD_MIN_SECONDS then
+    current.blink = false
+    current.dormant = true
+    hideLine()
+  elseif current and held >= FRAME_HOLD_MIN_SECONDS then
     current.frameIndex = current.frameIndex + 1
     if current.frameIndex > #current.frames then
       current.frameIndex = 1
       if ACKED_TYPES[current.t] and not current.again then
-        if current.neverGivesUp then
+        if helloPending and current.t ~= "hello" then
+          helloPending = false
+          local hello = buildHelloEntry(true)
+          if hello then
+            hello.resume = current
+            startCurrent(hello)
+            C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
+            return
+          end
+        elseif current.neverGivesUp then
           if nextSlotIndex ~= current.slotAtSend then
             local entry = buildHelloEntry(false)
             if entry then
@@ -304,13 +451,6 @@ local function repaintTick()
               entry.frameIndex = 1
               current = entry
             end
-          end
-        else
-          current.cyclesCompleted = current.cyclesCompleted + 1
-          if current.cyclesCompleted >= HOLD_CYCLES then
-            advanceOrHandoff()
-            C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
-            return
           end
         end
       else
@@ -324,37 +464,68 @@ local function repaintTick()
   C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
 end
 
-local function hasQueuedHello()
-  if current and current.t == "hello" then
-    return true
-  end
-  for i = 1, #sendQueue do
-    if sendQueue[i].t == "hello" then
-      return true
-    end
-  end
-  return false
-end
-
 local function announceHello()
-  if hasQueuedHello() then
+  if current and current.t == "hello" then
+    return
+  end
+  if current then
+    helloPending = true
     return
   end
   local entry, err = buildHelloEntry(true)
   if entry then
-    if current then
-      table.insert(sendQueue, entry)
-    else
-      startCurrent(entry)
-    end
+    startCurrent(entry)
   else
-    print("WoW Companion: failed to encode hello: " .. tostring(err))
+    print(CHAT_PREFIX .. "could not prepare the connection message: " .. tostring(err))
   end
 end
 
 local function helloAnnounceTick()
+  if current and current.dormant and signalsTrusted then
+    current.dormant = false
+    current.blink = true
+    paintCurrentFrame()
+  end
   announceHello()
   C_Timer.After(HELLO_INTERVAL_SECONDS, helloAnnounceTick)
+end
+
+local function warnWhenLineUnreadable()
+  if not signalsTrusted then
+    companionSeenSince = nil
+    return
+  end
+  local now = GetTime()
+  companionSeenSince = companionSeenSince or now
+  if helloUnackedSince == nil or unreadableWarned then
+    return
+  end
+  if
+    now - helloUnackedSince >= UNREADABLE_LINE_AFTER_SECONDS
+    and now - companionSeenSince >= UNREADABLE_LINE_AFTER_SECONDS
+  then
+    unreadableWarned = true
+    print(UNREADABLE_LINE_MESSAGE)
+    print(UNREADABLE_LINE_HINT)
+    if current and current.neverGivesUp then
+      current.dormant = true
+      hideLine()
+    end
+  end
+end
+
+local function warnWhenStalled()
+  if
+    current
+    and ACKED_TYPES[current.t]
+    and current.t ~= "hello"
+    and not current.stallNoticed
+    and current.startedAt
+    and GetTime() - current.startedAt >= STALLED_AFTER_SECONDS
+  then
+    current.stallNoticed = true
+    notify(STALLED_MESSAGE)
+  end
 end
 
 local function pollNextSlot()
@@ -381,8 +552,15 @@ local function pollNextSlot()
       end
     end
   end
+  warnWhenLineUnreadable()
+  warnWhenStalled()
+  if current and signalsTrusted and not lineShown and not current.dormant then
+    paintCurrentFrame()
+  end
   C_Timer.After(REPAINT_INTERVAL_SECONDS, pollNextSlot)
 end
+
+checkSignalsTrusted()
 
 do
   local entry, err = buildHelloEntry(false)
@@ -390,11 +568,9 @@ do
     registerHelloSeq(entry.seq)
     startCurrent(entry)
   else
-    print("WoW Companion: failed to encode hello: " .. tostring(err))
+    print(CHAT_PREFIX .. "could not prepare the connection message: " .. tostring(err))
   end
 end
-
-checkSignalsTrusted()
 
 C_Timer.After(REPAINT_INTERVAL_SECONDS, repaintTick)
 C_Timer.After(REPAINT_INTERVAL_SECONDS, pollNextSlot)

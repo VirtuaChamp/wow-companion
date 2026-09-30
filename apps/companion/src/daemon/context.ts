@@ -45,6 +45,7 @@ export type DaemonDeps = {
   describeMaxAgeMs?: number;
   gameWriteIntervalMs?: number;
   beforeDescribe?: () => Promise<void>;
+  commitRetryMs?: number;
   log?: (line: string) => void;
 };
 
@@ -80,6 +81,7 @@ export type DaemonContext = {
   persistChats(): void;
   persistSettings(): void;
   persistGame(): void;
+  saveState(): Promise<boolean>;
   isConnected(): boolean;
 };
 
@@ -159,6 +161,22 @@ export function createContext(deps: DaemonDeps): DaemonContext {
     persistSettings() {
       const settings = state.settings;
       persister.run(() => deps.settingsStore.save(settings));
+    },
+    saveState() {
+      return new Promise<boolean>((resolve) => {
+        const chats = state.chats;
+        const settings = state.settings;
+        persister.run(async () => {
+          try {
+            await deps.chatsStore.save(chats);
+            await deps.settingsStore.save(settings);
+            resolve(true);
+          } catch (error) {
+            resolve(false);
+            throw error;
+          }
+        });
+      });
     },
     persistGame() {
       gameWriter.schedule(state.game);

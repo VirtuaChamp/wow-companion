@@ -21,7 +21,6 @@ import { getState, onState } from "./daemon/state.ts";
 import { LOCAL_API_HOST, createLocalApiServer } from "./local-api-server.ts";
 import { createFsSlots } from "./adapters/fs-slots.ts";
 import { createScreenCaptureSource } from "./transport/capture.ts";
-import { GRID_MAX_DATA_ROWS, GRID_WIDTH } from "./transport/grid.ts";
 import { createScreenLink } from "./transport/screen-link.ts";
 import { EMPTY_WAV } from "./transport/slots.ts";
 
@@ -29,7 +28,8 @@ export type { Daemon, DaemonDeps };
 export { settingsFromConfig } from "./daemon/settings.ts";
 
 const GAME_PROCESS_NAME = "WowB";
-const CELL_PHYSICAL_SIZE = 4;
+const COMMIT_RETRY_MS = 1000;
+const MAX_APPLY_FAILURES = 3;
 
 function handle(ctx: DaemonContext, msg: GameToCompanion): Promise<void> | undefined {
   switch (msg.t) {
@@ -61,19 +61,65 @@ export function createDaemon(deps: DaemonDeps): Daemon {
 
   let settingsPending: Promise<void> | undefined;
 
+  async function commitToLink(msg: GameToCompanion): Promise<void> {
+    if (deps.link.committed === undefined) return;
+    while (!stopped) {
+      if ((await ctx.saveState()) && (await deps.link.committed(msg))) return;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, deps.commitRetryMs ?? COMMIT_RETRY_MS),
+      );
+    }
+  }
+
+  const applyFailures = new Map<string, number>();
+
+  async function applyThenCommit(
+    msg: Extract<GameToCompanion, { t: "ask" | "cmd" }>,
+    run: () => Promise<void> | undefined,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      ctx.log(`message ${msg.t} failed: ${String(error)}`);
+      const key = `${msg.t}:${msg.id}`;
+      const failures = (applyFailures.get(key) ?? 0) + 1;
+      if (failures < MAX_APPLY_FAILURES) {
+        applyFailures.set(key, failures);
+        deps.link.release?.(msg);
+        return;
+      }
+      applyFailures.delete(key);
+      ctx.out.send({
+        t: "error",
+        id: msg.id,
+        chat: msg.chat,
+        code: "daemon_error",
+        message: "the companion could not apply this message",
+      });
+    }
+    applyFailures.delete(`${msg.t}:${msg.id}`);
+    await commitToLink(msg);
+  }
+
   function dispatch(msg: GameToCompanion): void {
     const report = (error: unknown): void => ctx.log(`message ${msg.t} failed: ${String(error)}`);
     const gated =
       settingsPending !== undefined && (msg.t === "ask" || msg.t === "cmd" || msg.t === "settings");
-    let running: Promise<void> | undefined;
-    try {
-      running = gated ? settingsPending?.then(() => handle(ctx, msg)) : handle(ctx, msg);
-    } catch (error) {
-      report(error);
-      return;
+    const run = (): Promise<void> | undefined =>
+      gated ? settingsPending?.then(() => handle(ctx, msg)) : handle(ctx, msg);
+    let finished: Promise<void> | undefined;
+    if (msg.t === "ask" || msg.t === "cmd") {
+      finished = applyThenCommit(msg, run);
+    } else {
+      try {
+        finished = run()?.catch(report);
+      } catch (error) {
+        report(error);
+        return;
+      }
     }
-    if (running === undefined) return;
-    const tracked: Promise<void> = running.catch(report).finally(() => {
+    if (finished === undefined) return;
+    const tracked: Promise<void> = finished.finally(() => {
       detached.delete(tracked);
       if (settingsPending === tracked) settingsPending = undefined;
     });
@@ -144,9 +190,6 @@ async function main(): Promise<void> {
       return createScreenLink({
         frameSource: createScreenCaptureSource({
           windowProcessName: GAME_PROCESS_NAME,
-          gridWidthCells: GRID_WIDTH,
-          gridHeightCells: GRID_MAX_DATA_ROWS + 1,
-          cellPhysicalSize: CELL_PHYSICAL_SIZE,
           onCaptureError,
         }),
         fs: createFsSlots(),
@@ -154,6 +197,8 @@ async function main(): Promise<void> {
         emptyWav: EMPTY_WAV,
         slotCount: config.slotCount,
         onCaptureError,
+        log,
+        handledIds: startup.handledIds,
       });
     },
     buildDaemon: (link) =>

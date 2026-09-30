@@ -1,18 +1,25 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CompanionToGame, GameToCompanion } from "@wow-companion/contracts";
-import { createGridFileSource } from "../../src/transport/capture.ts";
 import { parseCellGridFile } from "../../src/transport/grid.ts";
+import type { Cell } from "../../src/transport/grid.ts";
+import { renderLegacyGridCapture, renderLineCapture } from "./line-render.ts";
+import { openHandledIds } from "../../src/adapters/handled-ids-store.ts";
+import { createHandledIds } from "../../src/transport/handled-ids.ts";
 import { createScreenLink } from "../../src/transport/screen-link.ts";
 import type { ScreenLink } from "../../src/transport/screen-link.ts";
 import { messageByteSize } from "../../src/transport/slots.ts";
 import type { SlotPaths } from "../../src/transport/slots.ts";
 import {
   cleanScratch,
+  captureOfGrid,
+  createGridFileSource,
   encodeHelloGridFile,
+  paintedFrameWithVersion,
+  paintedMultiFrame,
   parseSlotContent,
   repoRoot,
   resolveLuaCommand,
@@ -89,6 +96,8 @@ function noFrames() {
 }
 
 const instantDelay = (): Promise<void> => Promise.resolve();
+
+const askR1: GameToCompanion = { t: "ask", id: "r1", chat: "general", text: "", mentions: [] };
 
 type Connected = {
   link: ScreenLink;
@@ -191,6 +200,7 @@ describe("link.hello", () => {
     void (async () => {
       for await (const msg of link.messages()) {
         received.push(msg);
+        void link.committed(msg);
       }
     })();
 
@@ -445,7 +455,7 @@ describe("link.hello", () => {
       async next() {
         const text = readFileSync(useSecond ? secondGridPath : firstGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -744,7 +754,7 @@ describe("link.hello", () => {
       async next() {
         const text = readFileSync(useSecond ? secondGridPath : firstGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -794,7 +804,7 @@ describe("link.hello", () => {
       async next() {
         const text = readFileSync(useSecond ? secondGridPath : firstGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -954,6 +964,861 @@ describe("link.sizing", () => {
 });
 
 describe("link.ack", () => {
+  it("runs a re-encoded ask once: the same ask id under a second seq is acked but not delivered again", async () => {
+    const helloDir = mkdtempSync(join(tmpdir(), "wowc-link-dup-hello-"));
+    tmpDirs.push(helloDir);
+    encodeHelloGrid(helloDir, "sess-dup", 1, 1);
+    const firstDir = mkdtempSync(join(tmpdir(), "wowc-link-dup-a-"));
+    tmpDirs.push(firstDir);
+    encodeAskGrid(firstDir, 42);
+    const secondDir = mkdtempSync(join(tmpdir(), "wowc-link-dup-b-"));
+    tmpDirs.push(secondDir);
+    encodeAskGrid(secondDir, 43);
+    const grids = {
+      hello: join(helloDir, "frame-0.grid"),
+      first: join(firstDir, "frame-0.grid"),
+      second: join(secondDir, "frame-0.grid"),
+    };
+    let shown: keyof typeof grids = "hello";
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: switchableSource(() => grids[shown]),
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+        void link.committed(msg);
+      }
+    })();
+
+    await link.poll();
+    await link.idle();
+    shown = "first";
+    await link.poll();
+    await link.idle();
+    shown = "second";
+    await link.poll();
+    await link.poll();
+    await link.idle();
+
+    expect(received.filter((m) => m.t === "ask")).toHaveLength(1);
+    const ackedSeqs = writes
+      .filter((w) => w.path.includes("r.lua"))
+      .flatMap((w) => {
+        const msgs = parseSlotContent(w.data as string).msgs;
+        return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+      })
+      .filter((msg) => msg.t === "ack")
+      .map((msg) => msg.seq);
+    expect(ackedSeqs).toContain(42);
+    expect(ackedSeqs).toContain(43);
+  });
+
+  describe("across a companion restart", () => {
+    type Run = { applied: GameToCompanion[]; acked: number[] };
+
+    function fixture(): {
+      idsFile: string;
+      grids: Record<"hello" | "ask" | "cmd", readonly Cell[]>;
+    } {
+      const dir = mkdtempSync(join(tmpdir(), "wowc-handled-"));
+      tmpDirs.push(dir);
+      const helloCells = parseCellGridFile(
+        readFileSync(encodeHelloGridFile("sess-restart", 1, 1), "utf-8"),
+      );
+      if (!helloCells.ok) throw new Error("fixture");
+      const askDir = mkdtempSync(join(tmpdir(), "wowc-handled-ask-"));
+      tmpDirs.push(askDir);
+      encodeAskGrid(askDir, 42);
+      const askCells = parseCellGridFile(readFileSync(join(askDir, "frame-0.grid"), "utf-8"));
+      if (!askCells.ok) throw new Error("fixture");
+      return {
+        idsFile: join(dir, "state", "handled-ids.json"),
+        grids: {
+          hello: helloCells.value,
+          ask: askCells.value,
+          cmd: paintedFrameWithVersion(
+            2,
+            '{"t":"cmd","id":"cmd-r-1","chat":"default","name":"new"}',
+            60,
+          ),
+        },
+      };
+    }
+
+    type Mode = "receive" | "apply" | "commit";
+
+    async function runCompanion(
+      f: ReturnType<typeof fixture>,
+      mode: Mode,
+      effects: string[],
+    ): Promise<Run> {
+      const opened = await openHandledIds(f.idsFile);
+      if (!opened.ok) throw new Error("open");
+      const writes: RecordedWrite[] = [];
+      let current: keyof typeof f.grids = "hello";
+      const link = createScreenLink({
+        frameSource: {
+          async next() {
+            return captureOfGrid(f.grids[current]);
+          },
+          close(): void {},
+        },
+        fs: makeMemoryFs(writes),
+        paths,
+        emptyWav: new Uint8Array(0),
+        autopoll: false,
+        delay: instantDelay,
+        handledIds: opened.value,
+      });
+      activeLink = link;
+      const applied: GameToCompanion[] = [];
+      void (async () => {
+        for await (const msg of link.messages()) {
+          applied.push(msg);
+          if (mode !== "receive" && (msg.t === "ask" || msg.t === "cmd")) effects.push(msg.id);
+          if (mode === "commit") await link.committed(msg);
+        }
+      })();
+      await link.poll();
+      await link.idle();
+      for (const name of ["ask", "cmd"] as const) {
+        current = name;
+        await link.poll();
+        await link.idle();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await link.idle();
+      link.close();
+      const acked = writes
+        .filter((w) => w.path.includes("r.lua"))
+        .flatMap((w) => {
+          const msgs = parseSlotContent(w.data as string).msgs;
+          return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+        })
+        .filter((msg) => msg.t === "ack")
+        .map((msg) => msg.seq);
+      return { applied: applied.filter((m) => m.t === "ask" || m.t === "cmd"), acked };
+    }
+
+    it("does not apply an ask or a cmd again once it was committed, even when the ack was never read", async () => {
+      const f = fixture();
+      const effects: string[] = [];
+      const first = await runCompanion(f, "commit", effects);
+      expect(first.applied).toHaveLength(2);
+      expect(first.acked).toEqual(expect.arrayContaining([42, 60]));
+      const second = await runCompanion(f, "commit", effects);
+      expect(second.applied).toHaveLength(0);
+      expect(second.acked).toEqual(expect.arrayContaining([42, 60]));
+      expect(effects.sort()).toEqual(["cmd-r-1", "r1"]);
+    });
+
+    it("crash after receipt but before the effect: nothing is applied, acked or recorded, then the redelivered message takes effect exactly once", async () => {
+      const f = fixture();
+      const effects: string[] = [];
+      const crashed = await runCompanion(f, "receive", effects);
+      expect(crashed.applied).toHaveLength(2);
+      expect(effects).toEqual([]);
+      expect(crashed.acked).not.toContain(42);
+      expect(crashed.acked).not.toContain(60);
+      expect(existsSync(f.idsFile)).toBe(false);
+      const restarted = await runCompanion(f, "commit", effects);
+      expect(restarted.applied).toHaveLength(2);
+      expect(restarted.acked).toEqual(expect.arrayContaining([42, 60]));
+      expect(effects.sort()).toEqual(["cmd-r-1", "r1"]);
+      const third = await runCompanion(f, "commit", effects);
+      expect(third.applied).toHaveLength(0);
+      expect(effects).toHaveLength(2);
+    });
+
+    it("crash after the effect but before the id was recorded: nothing is acked or recorded, and the redelivered message takes effect a second time, never lost", async () => {
+      const f = fixture();
+      const effects: string[] = [];
+      const crashed = await runCompanion(f, "apply", effects);
+      expect(effects.sort()).toEqual(["cmd-r-1", "r1"]);
+      expect(crashed.acked).not.toContain(42);
+      expect(crashed.acked).not.toContain(60);
+      expect(existsSync(f.idsFile)).toBe(false);
+      const restarted = await runCompanion(f, "commit", effects);
+      expect(restarted.applied.map((m) => m.t).sort()).toEqual(["ask", "cmd"]);
+      expect(effects.sort()).toEqual(["cmd-r-1", "cmd-r-1", "r1", "r1"]);
+      expect(restarted.acked).toEqual(expect.arrayContaining([42, 60]));
+      expect(JSON.parse(readFileSync(f.idsFile, "utf-8"))).toEqual(
+        expect.arrayContaining(["ask:r1", "cmd:cmd-r-1"]),
+      );
+    });
+  });
+
+  it("acks nothing and records nothing until committed, retries a failed id write, then acks once", async () => {
+    const helloCells = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-nowrite", 1, 1), "utf-8"),
+    );
+    if (!helloCells.ok) throw new Error("fixture");
+    const cmd = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-w-1","chat":"default","name":"new"}',
+      80,
+    );
+    let shown: readonly Cell[] = helloCells.value;
+    let failing = true;
+    const handledIds = createHandledIds([], 500, async () =>
+      failing ? { ok: false, error: "write_failed" } : { ok: true, value: undefined },
+    );
+    const logs: string[] = [];
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      handledIds,
+      log: (line) => logs.push(line),
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+      }
+    })();
+    const ackedCmd = (): boolean =>
+      writes
+        .filter((w) => w.path.includes("r.lua"))
+        .some((w) => JSON.stringify(parseSlotContent(w.data as string).msgs).includes('"seq":80'));
+    await link.poll();
+    await link.idle();
+    shown = cmd;
+    await link.poll();
+    await link.poll();
+    await link.idle();
+    const delivered = received.find((m) => m.t === "cmd");
+    expect(received.filter((m) => m.t === "cmd")).toHaveLength(1);
+    expect(ackedCmd()).toBe(false);
+    if (delivered === undefined) throw new Error("not delivered");
+    expect(await link.committed(delivered)).toBe(false);
+    await link.idle();
+    expect(ackedCmd()).toBe(false);
+    expect(logs.some((line) => line.includes("could not record"))).toBe(true);
+    failing = false;
+    expect(await link.committed(delivered)).toBe(true);
+    await link.idle();
+    expect(ackedCmd()).toBe(true);
+  });
+
+  it("redelivers a released message on the next capture of the same frame, and acks it once it is committed", async () => {
+    const helloCells = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-release", 1, 1), "utf-8"),
+    );
+    if (!helloCells.ok) throw new Error("fixture");
+    const cmd = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-rel-1","chat":"default","name":"new"}',
+      100,
+    );
+    let shown: readonly Cell[] = helloCells.value;
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+      }
+    })();
+    await link.poll();
+    await link.idle();
+    shown = cmd;
+    await link.poll();
+    await link.poll();
+    await link.idle();
+    expect(received.filter((m) => m.t === "cmd")).toHaveLength(1);
+    link.release(received.find((m) => m.t === "cmd") as GameToCompanion);
+    await link.poll();
+    await link.idle();
+    const cmds = received.filter((m) => m.t === "cmd");
+    expect(cmds).toHaveLength(2);
+    await link.committed(cmds[1] as GameToCompanion);
+    await link.idle();
+    const acked = writes
+      .filter((w) => w.path.includes("r.lua"))
+      .flatMap((w) => {
+        const msgs = parseSlotContent(w.data as string).msgs;
+        return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+      })
+      .filter((msg) => msg.t === "ack")
+      .map((msg) => msg.seq);
+    expect(acked).toContain(100);
+  });
+
+  it("never acks a delayed commit into a newer session, and does not clear a new-session message that reuses the seq", async () => {
+    const helloA = parseCellGridFile(readFileSync(encodeHelloGridFile("sess-A", 1, 1), "utf-8"));
+    const helloB = parseCellGridFile(readFileSync(encodeHelloGridFile("sess-B", 1, 2), "utf-8"));
+    if (!helloA.ok || !helloB.ok) throw new Error("fixture");
+    const cmdA = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-a","chat":"default","name":"new"}',
+      42,
+    );
+    const cmdB = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-b","chat":"default","name":"new"}',
+      42,
+    );
+    let shown: readonly Cell[] = helloA.value;
+    let openGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const handledIds = createHandledIds([], 500, async () => {
+      await gate;
+      return { ok: true, value: undefined };
+    });
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      handledIds,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+      }
+    })();
+    const ackedIn = (sessionName: string): number[] =>
+      writes
+        .filter((w) => w.path.includes("r.lua"))
+        .map((w) => parseSlotContent(w.data as string))
+        .filter((slot) => slot.session === sessionName)
+        .flatMap((slot) =>
+          Array.isArray(slot.msgs) ? (slot.msgs as { t: string; seq: number }[]) : [],
+        )
+        .filter((msg) => msg.t === "ack")
+        .map((msg) => msg.seq);
+
+    await link.poll();
+    await link.idle();
+    shown = cmdA;
+    await link.poll();
+    await link.idle();
+    const msgA = received.find((m) => m.t === "cmd") as GameToCompanion;
+    const delayedCommit = link.committed(msgA);
+
+    shown = helloB.value;
+    await link.poll();
+    await link.idle();
+    shown = cmdB;
+    await link.poll();
+    await link.idle();
+    const msgB = received.filter((m) => m.t === "cmd")[1] as GameToCompanion;
+    expect((msgB as { id: string }).id).toBe("cmd-b");
+
+    openGate();
+    expect(await delayedCommit).toBe(true);
+    await link.idle();
+    expect(ackedIn("sess-B")).not.toContain(42);
+
+    expect(await link.committed(msgB)).toBe(true);
+    await link.idle();
+    expect(ackedIn("sess-B")).toContain(42);
+  });
+
+  it("writes no old-session ack into the new session when an old commit finishes while the new-session signal reset is blocked", async () => {
+    const helloA = parseCellGridFile(readFileSync(encodeHelloGridFile("sess-A", 1, 1), "utf-8"));
+    const helloB = parseCellGridFile(readFileSync(encodeHelloGridFile("sess-B", 1, 2), "utf-8"));
+    if (!helloA.ok || !helloB.ok) throw new Error("fixture");
+    const cmdA = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-a","chat":"default","name":"new"}',
+      42,
+    );
+    const cmdB = paintedFrameWithVersion(
+      2,
+      '{"t":"cmd","id":"cmd-b","chat":"default","name":"new"}',
+      42,
+    );
+    let shown: readonly Cell[] = helloA.value;
+    let openGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const resetGate = deferred();
+    let holdReset = false;
+    const handledIds = createHandledIds([], 500, async () => {
+      await gate;
+      return { ok: true, value: undefined };
+    });
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes, {
+        hooks: {
+          async beforeWrite(path, data) {
+            if (holdReset && path.startsWith("sig/") && (data as Uint8Array).length === 0) {
+              await resetGate.promise;
+            }
+          },
+        },
+      }),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      handledIds,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+      }
+    })();
+    const ackedIn = (sessionName: string): number[] =>
+      writes
+        .filter((w) => w.path.includes("r.lua"))
+        .map((w) => parseSlotContent(w.data as string))
+        .filter((slot) => slot.session === sessionName)
+        .flatMap((slot) =>
+          Array.isArray(slot.msgs) ? (slot.msgs as { t: string; seq: number }[]) : [],
+        )
+        .filter((msg) => msg.t === "ack")
+        .map((msg) => msg.seq);
+
+    await link.poll();
+    await link.idle();
+    shown = cmdA;
+    await link.poll();
+    await link.idle();
+    const msgA = received.find((m) => m.t === "cmd") as GameToCompanion;
+    const delayedCommit = link.committed(msgA);
+
+    holdReset = true;
+    shown = helloB.value;
+    const resync = link.poll();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    openGate();
+    expect(await delayedCommit).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    holdReset = false;
+    resetGate.resolve();
+    await resync;
+    await link.idle();
+    expect(ackedIn("sess-B")).toContain(2);
+    expect(ackedIn("sess-B")).not.toContain(42);
+
+    shown = cmdB;
+    await link.poll();
+    await link.idle();
+    const msgB = received.filter((m) => m.t === "cmd")[1] as GameToCompanion;
+    expect(await link.committed(msgB)).toBe(true);
+    await link.idle();
+    expect(ackedIn("sess-B")).toContain(42);
+  });
+
+  it("keeps a multi-frame message's partial frames across a hello that arrives between two passes", async () => {
+    const hello = parseCellGridFile(readFileSync(encodeHelloGridFile("sess-mid", 1, 1), "utf-8"));
+    const again = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-mid", 1, 2, true), "utf-8"),
+    );
+    if (!hello.ok || !again.ok) throw new Error("fixture");
+    const dir = mkdtempSync(join(tmpdir(), "wowc-multi-"));
+    tmpDirs.push(dir);
+    const result = spawnSync(
+      resolveLuaCommand(),
+      [join(repoRoot, "tests", "lua", "codec", "encode_message_to_grid.lua"), dir, "3000", "77"],
+      { cwd: repoRoot, encoding: "utf8" },
+    );
+    if (result.status !== 0) throw new Error(`lua encoder failed: ${result.stderr}`);
+    const frameCount = Number(readFileSync(join(dir, "meta.txt"), "utf-8"));
+    expect(frameCount).toBeGreaterThan(2);
+    const frames = Array.from({ length: frameCount }, (_, i) => {
+      const parsed = parseCellGridFile(readFileSync(join(dir, `frame-${String(i)}.grid`), "utf-8"));
+      if (!parsed.ok) throw new Error("fixture");
+      return parsed.value;
+    });
+    let shown: readonly Cell[] = hello.value;
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+        void link.committed(msg);
+      }
+    })();
+    await link.poll();
+    await link.idle();
+    const asks = (): number => received.filter((m) => m.t === "ask").length;
+    for (const frame of frames.slice(0, -1)) {
+      shown = frame;
+      await link.poll();
+    }
+    expect(asks()).toBe(0);
+    shown = again.value;
+    await link.poll();
+    await link.idle();
+    shown = frames[frameCount - 1] as readonly Cell[];
+    await link.poll();
+    await link.idle();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(asks()).toBe(1);
+  });
+
+  describe("a completed reassembly only dedups repaints of the message it completed", () => {
+    const stateJson = (money: number, seq: number): string =>
+      `{"t":"state","seq":${String(seq)},"delta":{"money":${String(money)}}}`;
+
+    async function harness(): Promise<{
+      show(grid: readonly Cell[]): Promise<void>;
+      received: GameToCompanion[];
+      acked(): number[];
+      helloAgain: readonly Cell[];
+    }> {
+      const hello = parseCellGridFile(
+        readFileSync(encodeHelloGridFile("sess-wrap", 1, 1), "utf-8"),
+      );
+      const again = parseCellGridFile(
+        readFileSync(encodeHelloGridFile("sess-wrap", 1, 2, true), "utf-8"),
+      );
+      if (!hello.ok || !again.ok) throw new Error("fixture");
+      let shown: readonly Cell[] = hello.value;
+      const writes: RecordedWrite[] = [];
+      const link = createScreenLink({
+        frameSource: {
+          async next() {
+            return captureOfGrid(shown);
+          },
+          close(): void {},
+        },
+        fs: makeMemoryFs(writes),
+        paths,
+        emptyWav: new Uint8Array(0),
+        autopoll: false,
+        delay: instantDelay,
+      });
+      activeLink = link;
+      const received: GameToCompanion[] = [];
+      void (async () => {
+        for await (const msg of link.messages()) {
+          received.push(msg);
+          void link.committed(msg);
+        }
+      })();
+      await link.poll();
+      await link.idle();
+      return {
+        async show(grid) {
+          shown = grid;
+          await link.poll();
+          await link.idle();
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        },
+        received,
+        acked: () =>
+          writes
+            .filter((w) => w.path.includes("r.lua"))
+            .flatMap((w) => {
+              const msgs = parseSlotContent(w.data as string).msgs;
+              return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+            })
+            .filter((msg) => msg.t === "ack")
+            .map((msg) => msg.seq),
+        helloAgain: again.value,
+      };
+    }
+
+    it("delivers a new multi-frame message that reuses the seq of a completed one after other traffic, acks what follows and drains the queue", async () => {
+      const h = await harness();
+      const first = paintedMultiFrame(stateJson(1, 5), 500, 2);
+      const second = paintedMultiFrame(stateJson(2, 6), 500, 2);
+      for (const frame of first) await h.show(frame);
+      expect(h.received.filter((m) => m.t === "state")).toHaveLength(1);
+      await h.show(first[1] as readonly Cell[]);
+      expect(h.received.filter((m) => m.t === "state")).toHaveLength(1);
+      await h.show(
+        paintedFrameWithVersion(
+          2,
+          '{"t":"cmd","id":"cmd-wrap-1","chat":"default","name":"new"}',
+          501,
+        ),
+      );
+      for (const frame of second) await h.show(frame);
+      const states = h.received.filter((m) => m.t === "state");
+      expect(states).toHaveLength(2);
+      await h.show(
+        paintedFrameWithVersion(
+          2,
+          '{"t":"ask","id":"a-wrap-1","chat":"c","text":"x","mentions":[]}',
+          502,
+        ),
+      );
+      expect(h.received.filter((m) => m.t === "ask")).toHaveLength(1);
+      expect(h.acked()).toEqual(expect.arrayContaining([501, 502]));
+    });
+
+    it("keeps a completed multi-frame message across an again-hello, so its repaint is not delivered a second time", async () => {
+      const h = await harness();
+      const frames = paintedMultiFrame(stateJson(1, 5), 700, 2);
+      for (const frame of frames) await h.show(frame);
+      expect(h.received.filter((m) => m.t === "state")).toHaveLength(1);
+      await h.show(h.helloAgain);
+      await h.show(frames[1] as readonly Cell[]);
+      await h.show(frames[0] as readonly Cell[]);
+      expect(h.received.filter((m) => m.t === "state")).toHaveLength(1);
+    });
+
+    it("clears a completed single-frame message when a multi-frame message starts, so a later single-frame message reusing its seq is delivered", async () => {
+      const h = await harness();
+      const cmdJson = (id: string): string =>
+        `{"t":"cmd","id":"${id}","chat":"default","name":"new"}`;
+      await h.show(paintedFrameWithVersion(2, cmdJson("cmd-s1"), 600));
+      for (const frame of paintedMultiFrame(stateJson(4, 10), 900, 2)) await h.show(frame);
+      await h.show(paintedFrameWithVersion(2, cmdJson("cmd-s2"), 600));
+      expect(h.received.filter((m) => m.t === "cmd")).toHaveLength(2);
+    });
+
+    it("drops an abandoned partial multi-frame message when other traffic arrives, so a new message reusing its seq and total is not merged with it", async () => {
+      const h = await harness();
+      const askJson = (id: string, text: string): string =>
+        `{"t":"ask","id":"${id}","chat":"c","text":"${text}","mentions":[]}`;
+      const abandoned = paintedMultiFrame(askJson("a-lost", "x".repeat(30)), 1200, 2);
+      await h.show(abandoned[0] as readonly Cell[]);
+      await h.show(
+        paintedFrameWithVersion(
+          2,
+          '{"t":"cmd","id":"cmd-mid","chat":"default","name":"new"}',
+          1201,
+        ),
+      );
+      const fresh = paintedMultiFrame(askJson("a-new", "y".repeat(30)), 1200, 2);
+      for (const frame of fresh) await h.show(frame);
+      const asks = h.received.filter((m) => m.t === "ask");
+      expect(asks).toHaveLength(1);
+      expect(asks[0]).toMatchObject({ id: "a-new", text: "y".repeat(30) });
+      expect(h.acked()).toContain(1200);
+      await h.show(paintedFrameWithVersion(2, askJson("a-next", "z"), 1202));
+      expect(h.received.filter((m) => m.t === "ask")).toHaveLength(2);
+    });
+
+    it("keeps an active partial multi-frame message across an again-hello", async () => {
+      const h = await harness();
+      const frames = paintedMultiFrame(stateJson(3, 9), 800, 2);
+      await h.show(frames[0] as readonly Cell[]);
+      await h.show(h.helloAgain);
+      await h.show(frames[1] as readonly Cell[]);
+      expect(h.received.filter((m) => m.t === "state")).toHaveLength(1);
+    });
+  });
+
+  it("does not deliver a second seq of a message that is still being applied, and acks both seqs once it is committed", async () => {
+    const helloCells = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-inflight", 1, 1), "utf-8"),
+    );
+    if (!helloCells.ok) throw new Error("fixture");
+    const json = '{"t":"cmd","id":"cmd-i-1","chat":"default","name":"new"}';
+    let shown: readonly Cell[] = helloCells.value;
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+      }
+    })();
+    await link.poll();
+    await link.idle();
+    shown = paintedFrameWithVersion(2, json, 90);
+    await link.poll();
+    shown = paintedFrameWithVersion(2, json, 91);
+    await link.poll();
+    await link.idle();
+    const delivered = received.filter((m) => m.t === "cmd");
+    expect(delivered).toHaveLength(1);
+    await link.committed(delivered[0] as GameToCompanion);
+    await link.idle();
+    const acked = writes
+      .filter((w) => w.path.includes("r.lua"))
+      .flatMap((w) => {
+        const msgs = parseSlotContent(w.data as string).msgs;
+        return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+      })
+      .map((msg) => msg.seq);
+    expect(acked).toEqual(expect.arrayContaining([90, 91]));
+  });
+
+  it("runs a re-encoded cmd once: the same cmd id under a second seq is acked but not delivered again", async () => {
+    const helloCells = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-cmd", 1, 1), "utf-8"),
+    );
+    if (!helloCells.ok) throw new Error("fixture");
+    const json = '{"t":"cmd","id":"cmd-x-1","chat":"default","name":"new"}';
+    const grids = {
+      hello: helloCells.value,
+      first: paintedFrameWithVersion(2, json, 60),
+      second: paintedFrameWithVersion(2, json, 61),
+    };
+    let shown: keyof typeof grids = "hello";
+    const writes: RecordedWrite[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(grids[shown]);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs(writes),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+        void link.committed(msg);
+      }
+    })();
+    await link.poll();
+    await link.idle();
+    shown = "first";
+    await link.poll();
+    await link.idle();
+    shown = "second";
+    await link.poll();
+    await link.poll();
+    await link.idle();
+    expect(received.filter((m) => m.t === "cmd")).toHaveLength(1);
+    const ackedSeqs = writes
+      .filter((w) => w.path.includes("r.lua"))
+      .flatMap((w) => {
+        const msgs = parseSlotContent(w.data as string).msgs;
+        return Array.isArray(msgs) ? (msgs as { t: string; seq: number }[]) : [];
+      })
+      .filter((msg) => msg.t === "ack")
+      .map((msg) => msg.seq);
+    expect(ackedSeqs).toContain(60);
+    expect(ackedSeqs).toContain(61);
+  });
+
+  it("delivers two different cmds that carry different ids", async () => {
+    const helloCells = parseCellGridFile(
+      readFileSync(encodeHelloGridFile("sess-cmd2", 1, 1), "utf-8"),
+    );
+    if (!helloCells.ok) throw new Error("fixture");
+    const grids = {
+      hello: helloCells.value,
+      first: paintedFrameWithVersion(
+        2,
+        '{"t":"cmd","id":"cmd-a","chat":"default","name":"new"}',
+        70,
+      ),
+      second: paintedFrameWithVersion(
+        2,
+        '{"t":"cmd","id":"cmd-b","chat":"default","name":"new"}',
+        71,
+      ),
+    };
+    let shown: keyof typeof grids = "hello";
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(grids[shown]);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    const received: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        received.push(msg);
+        void link.committed(msg);
+      }
+    })();
+    await link.poll();
+    await link.idle();
+    shown = "first";
+    await link.poll();
+    shown = "second";
+    await link.poll();
+    await link.idle();
+    expect(received.filter((m) => m.t === "cmd")).toHaveLength(2);
+  });
+
   it("delivers an ask frame once across repeated captures and acks it in a slot stamped with the session", async () => {
     const helloDir = mkdtempSync(join(tmpdir(), "wowc-link-ack-hello-"));
     tmpDirs.push(helloDir);
@@ -972,7 +1837,7 @@ describe("link.ack", () => {
       async next() {
         const text = readFileSync(useAsk ? gridPath : helloGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -990,6 +1855,7 @@ describe("link.ack", () => {
     void (async () => {
       for await (const msg of link.messages()) {
         received.push(msg);
+        void link.committed(msg);
       }
     })();
 
@@ -1028,7 +1894,7 @@ describe("link.ack", () => {
       async next() {
         const text = readFileSync(useState ? stateGridPath : helloGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -1140,7 +2006,7 @@ describe("link.reannounce", () => {
       async next() {
         const text = readFileSync(useAgain ? againGridPath : helloGridPath, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -1337,6 +2203,7 @@ describe("link.resync-race", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     show(join(askDir, "frame-0.grid"));
     await link.poll();
+    await link.committed(askR1);
 
     holdReset = true;
     show(encodeHelloGridFile("sess-race-e", 6, 3, true));
@@ -1433,7 +2300,7 @@ describe("link.exhausted", () => {
         const path = stage === "helloA" ? helloGrid : stage === "ask" ? askGrid : helloBGrid;
         const text = readFileSync(path, "utf-8");
         const parsed = parseCellGridFile(text);
-        return parsed.ok ? parsed.value : undefined;
+        return parsed.ok ? captureOfGrid(parsed.value) : undefined;
       },
       close(): void {},
     };
@@ -1455,6 +2322,7 @@ describe("link.exhausted", () => {
 
     stage = "ask";
     await link.poll();
+    await link.committed(askR1);
     await new Promise((resolve) => setTimeout(resolve, 20));
     const errorsAfterExhaustion = errors.length;
     expect(errorsAfterExhaustion).toBeGreaterThan(0);
@@ -1636,5 +2504,181 @@ describe("link.presence", () => {
 
     expect(link.send(reply)).toEqual({ ok: false, error: "slots_exhausted" });
     expect(writes).toEqual([]);
+  });
+});
+
+describe("link.line", () => {
+  function helloCells(session: string, again: boolean): readonly Cell[] {
+    const gridPath = encodeHelloGridFile(session, 1, again ? 2 : 1, again);
+    const parsed = parseCellGridFile(readFileSync(gridPath, "utf-8"));
+    if (!parsed.ok) throw new Error("fixture");
+    return parsed.value;
+  }
+
+  function corrupted(cells: readonly Cell[]): readonly Cell[] {
+    const mutable = cells.slice() as Cell[];
+    mutable[40] = ((mutable[40] ?? 0) ^ 3) as Cell;
+    return mutable;
+  }
+
+  it("counts every capture that shows the line but decodes no frame, and logs it at most once per interval", async () => {
+    const shown = corrupted(helloCells("sess-line-a", false));
+    let clock = 0;
+    const logs: string[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(shown);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+      now: () => clock,
+      log: (line) => logs.push(line),
+    });
+    activeLink = link;
+
+    await link.poll();
+    await link.poll();
+    expect(link.status().badFrames).toBe(2);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("video settings");
+
+    clock += 31_000;
+    await link.poll();
+    expect(logs).toHaveLength(2);
+    expect(link.status().connected).toBe(false);
+  });
+
+  it("says once that the addon and companion versions differ when a frame of another codec version decodes", async () => {
+    const other = paintedFrameWithVersion(1, '{"t":"state","seq":1,"delta":{}}');
+    const logs: string[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(other);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      log: (line) => logs.push(line),
+    });
+    activeLink = link;
+    await link.poll();
+    await link.poll();
+    expect(logs).toEqual(["addon and companion versions differ, run setup and restart the game"]);
+    expect(link.status().badFrames).toBe(2);
+    expect(link.status().connected).toBe(false);
+  });
+
+  it("says once that the versions differ when the capture shows the real version 1 grid, and counts each capture as a bad frame", async () => {
+    const legacy = renderLegacyGridCapture(
+      Array.from({ length: 200 }, (_, i) => ((i * 3) % 8) as Cell),
+    );
+    const logs: string[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return legacy;
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      log: (line) => logs.push(line),
+    });
+    activeLink = link;
+    await link.poll();
+    await link.poll();
+    expect(logs).toEqual(["addon and companion versions differ, run setup and restart the game"]);
+    expect(link.status().badFrames).toBe(2);
+    expect(link.status().connected).toBe(false);
+  });
+
+  it("reads a frame of the current codec version from the same helper", async () => {
+    const current = paintedFrameWithVersion(2, '{"t":"state","seq":1,"delta":{}}');
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return captureOfGrid(current);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+    });
+    activeLink = link;
+    await link.poll();
+    expect(link.status().badFrames).toBe(0);
+  });
+
+  it("stays connected across the 10 s gap between again-hello blinks and drops after twice that", async () => {
+    const hello = helloCells("sess-line-b", false);
+    let clock = 0;
+    let visible: readonly Cell[] | undefined = hello;
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return visible === undefined ? undefined : captureOfGrid(visible);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      slotCount: 10,
+      delay: instantDelay,
+      now: () => clock,
+    });
+    activeLink = link;
+
+    await link.poll();
+    await link.idle();
+    expect(link.status().connected).toBe(true);
+    visible = undefined;
+    clock += 10_500;
+    await link.poll();
+    expect(link.status().connected).toBe(true);
+    clock += 15_000;
+    await link.poll();
+    expect(link.status().connected).toBe(false);
+  });
+
+  it("ignores captures with no line at all: no bad frame, no log", async () => {
+    const logs: string[] = [];
+    const link = createScreenLink({
+      frameSource: {
+        async next() {
+          return renderLineCapture([]);
+        },
+        close(): void {},
+      },
+      fs: makeMemoryFs([]),
+      paths,
+      emptyWav: new Uint8Array(0),
+      autopoll: false,
+      delay: instantDelay,
+      log: (line) => logs.push(line),
+    });
+    activeLink = link;
+    await link.poll();
+    expect(link.status().badFrames).toBe(0);
+    expect(logs).toEqual([]);
   });
 });

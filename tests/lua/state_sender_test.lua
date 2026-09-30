@@ -292,7 +292,9 @@ do
     end,
     paint = function(frame)
       table.insert(painted, frame)
+      return true
     end,
+    hide = function() end,
   }
   loadStateModule(ns)
   local current = freshSnapshot()
@@ -304,6 +306,7 @@ do
     return copy
   end
   _G.WOWC_TEST_TIMER_CALLBACKS = {}
+  _G.WOWC_TEST_SET_SIGNAL_PRESENT("Interface\\AddOns\\WoWCompanion_Signals\\sig\\ctl-gone.wav", false)
   local inboxChunk = assert(loadfile("addon/WoWCompanion/Inbox.lua"))
   inboxChunk("WoWCompanion", ns)
   local senderChunk = assert(loadfile("addon/WoWCompanion/StateSender.lua"))

@@ -93,3 +93,14 @@ _G.WOWC_TEST_INSTALL_TRANSPORT = function(ns)
   ns.Transport = fake
   return fake
 end
+
+_G.GetPhysicalScreenSize = function()
+  return _G.WOWC_TEST_PHYSICAL_WIDTH or 1920, _G.WOWC_TEST_PHYSICAL_HEIGHT or 1080
+end
+
+_G.PixelUtil = {
+  GetPixelToUIUnitFactor = function()
+    local _, physicalHeight = _G.GetPhysicalScreenSize()
+    return 768.0 / physicalHeight
+  end,
+}

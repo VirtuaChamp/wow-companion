@@ -142,7 +142,13 @@ describe("chats.title", () => {
       mentions: [],
     });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
-    harness.link.push({ t: "cmd", chat: "default", name: "rename", arg: "My own name" });
+    harness.link.push({
+      t: "cmd",
+      id: "cmd-1",
+      chat: "default",
+      name: "rename",
+      arg: "My own name",
+    });
     await waitFor(() => chatNames(harness).at(-1) === "My own name");
 
     gate.resolve({ ok: true, value: { sessionId: "t", text: "Provider title" } });
@@ -158,7 +164,7 @@ describe("chats.title", () => {
     const seen: RunInput[] = [];
     const harness = await connected(answering(titled("Provider title"), seen));
 
-    harness.link.push({ t: "cmd", chat: "default", name: "rename", arg: "Mine" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "rename", arg: "Mine" });
     await waitFor(() => chatNames(harness).at(-1) === "Mine");
     harness.link.push({ t: "ask", id: "a1", chat: "default", text: "a question", mentions: [] });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
@@ -218,9 +224,9 @@ describe("chats.title", () => {
       mentions: [],
     });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Other" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Other" });
     await waitFor(() => harness.saves.at(-1)?.chats.length === 2);
-    harness.link.push({ t: "cmd", chat: "default", name: "delete" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "delete" });
     await waitFor(() => harness.saves.at(-1)?.chats.length === 1);
 
     gate.resolve({ ok: true, value: { sessionId: "t", text: "Late title" } });
@@ -232,8 +238,8 @@ describe("chats.title", () => {
   it("the title source persists in chats.json and /ai new <name> makes a user title", async () => {
     const harness = await connected(answering(titled("Provider title")));
 
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Named" });
-    harness.link.push({ t: "cmd", chat: "default", name: "new" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Named" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new" });
     await waitFor(() => harness.saves.at(-1)?.chats.length === 3);
 
     const sources = harness.saves.at(-1)?.chats.map((chat) => [chat.name, chat.titleSource]);
@@ -266,7 +272,7 @@ describe("chats.title", () => {
       mentions: [],
     });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Other" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Other" });
     await waitFor(() => harness.saves.at(-1)?.chats.length === 2);
     const before = harness.saves.at(-1)?.chats.find((chat) => chat.id === "default");
     expect(before?.name).toBe("first question");
@@ -296,7 +302,7 @@ describe("chats.title", () => {
       mentions: [],
     });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
-    harness.link.push({ t: "cmd", chat: "default", name: "delete" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "delete" });
     await waitFor(() => harness.saves.at(-1)?.chats[0]?.history.length === 0);
     expect(harness.saves.at(-1)?.chats.map((chat) => chat.name)).toEqual(["Default"]);
 
@@ -319,7 +325,7 @@ describe("chats.title", () => {
       mentions: [],
     });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "reply"));
-    harness.link.push({ t: "cmd", chat: "default", name: "reset" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "reset" });
     await waitFor(() => harness.saves.at(-1)?.chats[0]?.history.length === 0);
 
     gate.resolve({ ok: true, value: { sessionId: "t", text: "Late title" } });

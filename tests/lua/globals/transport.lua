@@ -2,6 +2,7 @@ return {
   "CreateFrame",
   "UIParent",
   "GetPhysicalScreenSize",
+  "PixelUtil",
   "PlaySoundFile",
   "StopSound",
   "C_AddOns",

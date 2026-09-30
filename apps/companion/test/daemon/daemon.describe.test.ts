@@ -73,7 +73,7 @@ describe("daemon.describe", () => {
 
     harness.link.push(hello());
     harness.link.push({ t: "state", seq: 1, delta: makeSnapshot() });
-    harness.link.push({ t: "cmd", chat: "default", name: "new", arg: "Second" });
+    harness.link.push({ t: "cmd", id: "cmd-1", chat: "default", name: "new", arg: "Second" });
     await waitFor(() => harness.link.sent().some((msg) => msg.t === "chats"));
 
     expect(

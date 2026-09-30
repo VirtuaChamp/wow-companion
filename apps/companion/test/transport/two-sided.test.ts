@@ -5,12 +5,17 @@ import { access, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CompanionToGame } from "@wow-companion/contracts";
-import { createGridFileSource } from "../../src/transport/capture.ts";
+import type { CompanionToGame, GameToCompanion } from "@wow-companion/contracts";
 import { createScreenLink } from "../../src/transport/screen-link.ts";
 import type { ScreenLink } from "../../src/transport/screen-link.ts";
 import type { SlotFs, SlotPaths } from "../../src/transport/slots.ts";
-import { cleanScratch, repoRoot, resolveLuaCommand, scratchDir } from "./link-harness.ts";
+import {
+  cleanScratch,
+  createGridFileSource,
+  repoRoot,
+  resolveLuaCommand,
+  scratchDir,
+} from "./link-harness.ts";
 
 const SLOT_COUNT = 10;
 
@@ -182,6 +187,10 @@ function createWorld(): World {
       return link;
     },
     async captureInto(link: ScreenLink): Promise<void> {
+      await link.idle();
+      if ((await sim.info()).paintCount === 0) {
+        await sim.command("tick poll");
+      }
       await sim.command("grid");
       await link.poll();
       await link.idle();
@@ -346,6 +355,124 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     expect(restarted.status().slotsLeft).toBe(SLOT_COUNT - (after.slot - 1));
   });
 
+  it("a companion restarted while an ask waits for its ack learns the session from the interleaved hello and acks the stuck ask, with no /reload", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const first = world.startLink();
+    await converge(world, first);
+    await world.addonPolls(1);
+    await world.addonTick("repaint", 2);
+    const sent = await world.sim.command("ask stuck-1 where is the inn");
+    expect(sent.startsWith("ok")).toBe(true);
+    first.close();
+
+    const restarted = world.startLink();
+    const asks: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of restarted.messages()) {
+        if (msg.t === "ask") asks.push(msg);
+        await restarted.committed(msg);
+      }
+    })();
+    await world.captureInto(restarted);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(asks).toHaveLength(1);
+    expect(await world.sim.command("shown")).toBe("yes");
+
+    await world.addonTick("hello");
+    await world.addonTick("repaint");
+    await world.captureInto(restarted);
+    await world.addonTick("repaint", 2);
+    await world.captureInto(restarted);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await restarted.idle();
+    await world.addonPolls(3);
+
+    expect(await world.sim.command("shown")).toBe("no");
+    expect(restarted.send(reply("after-restart")).ok).toBe(true);
+    await restarted.idle();
+    await world.addonPolls(2);
+    const after = await world.sim.info();
+    expect(receivedIds(after)).toContain("after-restart");
+    expect(asks).toHaveLength(1);
+  });
+
+  it("a companion restarted while an ask waits with another ask queued behind it re-syncs at the pass boundary, acks both and drains the queue", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const first = world.startLink();
+    await converge(world, first);
+    await world.addonPolls(1);
+    await world.addonTick("repaint", 2);
+    expect((await world.sim.command("ask stuck-a first question")).startsWith("ok")).toBe(true);
+    expect((await world.sim.command("ask stuck-b second question")).startsWith("ok")).toBe(true);
+    first.close();
+
+    const restarted = world.startLink();
+    const asks: string[] = [];
+    void (async () => {
+      for await (const msg of restarted.messages()) {
+        if (msg.t === "ask") asks.push(msg.id);
+        await restarted.committed(msg);
+      }
+    })();
+    await world.captureInto(restarted);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await world.addonTick("hello");
+    await world.addonTick("repaint");
+    await world.captureInto(restarted);
+    for (let round = 0; round < 3; round += 1) {
+      await world.addonTick("repaint", 2);
+      await world.captureInto(restarted);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await restarted.idle();
+      await world.addonPolls(2);
+    }
+    expect(asks).toEqual(["stuck-a", "stuck-b"]);
+    await world.addonTick("repaint", 2);
+    expect(await world.sim.command("shown")).toBe("no");
+    expect(restarted.send(reply("after-queue")).ok).toBe(true);
+    await restarted.idle();
+    await world.addonPolls(2);
+    expect(receivedIds(await world.sim.info())).toContain("after-queue");
+  });
+
+  it("a 16 KB ask at 800 px, whose pass outlasts the hello interval, completes across a hello turn and a skipped frame, and is acked by a healthy companion", async () => {
+    const world = createWorld();
+    await world.sim.command("width 800");
+    await world.sim.command("load");
+    const link = world.startLink();
+    const asks: GameToCompanion[] = [];
+    void (async () => {
+      for await (const msg of link.messages()) {
+        if (msg.t === "ask") asks.push(msg);
+        await link.committed(msg);
+      }
+    })();
+    await converge(world, link);
+    await world.addonPolls(1);
+    await world.addonTick("repaint", 2);
+    const text = "a".repeat(15_500);
+    expect((await world.sim.command(`ask big-1 ${text}`)).startsWith("ok")).toBe(true);
+
+    let frames = 0;
+    for (let i = 0; i < 200 && asks.length === 0; i += 1) {
+      if (i !== 4) await world.captureInto(link);
+      if (i % 30 === 12) await world.addonTick("hello");
+      await world.addonTick("repaint");
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      frames = i + 1;
+    }
+    expect(frames).toBeGreaterThan(40);
+    expect(asks).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await link.idle();
+    await world.addonPolls(3);
+    await world.addonTick("repaint", 2);
+    expect(await world.sim.command("shown")).toBe("no");
+    expect(asks).toHaveLength(1);
+  });
+
   it("a restarted companion delivers the unread slots the previous process wrote, in order, and then its new messages", async () => {
     const world = createWorld();
     await world.sim.command("load");
@@ -455,6 +582,46 @@ describe("two-sided simulation: the real Inbox.lua against the real screen-link"
     for (let index = 0; index < SLOT_COUNT; index += 1) {
       expect(world.signalPresent(index)).toBe(true);
     }
+  });
+
+  it("the line is only on screen while the addon has something to send", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    expect(await world.sim.command("shown")).toBe("no");
+    await world.addonPolls(3);
+    expect(await world.sim.command("shown")).toBe("no");
+
+    const link = world.startLink();
+    await link.idle();
+    await world.addonPolls(1);
+    expect(await world.sim.command("shown")).toBe("yes");
+    await converge(world, link);
+    expect(await world.sim.command("shown")).toBe("yes");
+    await world.addonTick("repaint");
+    expect(await world.sim.command("shown")).toBe("no");
+
+    await world.addonTick("hello");
+    expect(await world.sim.command("shown")).toBe("yes");
+    await world.addonTick("repaint");
+    expect(await world.sim.command("shown")).toBe("no");
+    const badBefore = link.status().badFrames;
+    await world.captureInto(link);
+    expect(link.status().badFrames).toBe(badBefore);
+  });
+
+  it("an unacked hello goes dormant after 20 s of a running companion and blinks at each 10 s tick", async () => {
+    const world = createWorld();
+    await world.sim.command("load");
+    const link = world.startLink();
+    await link.idle();
+    await world.addonPolls(1);
+    expect(await world.sim.command("shown")).toBe("yes");
+    await world.addonPolls(84);
+    expect(await world.sim.command("shown")).toBe("no");
+    await world.addonTick("hello");
+    expect(await world.sim.command("shown")).toBe("yes");
+    await world.addonTick("repaint");
+    expect(await world.sim.command("shown")).toBe("no");
   });
 
   it("a game started before the companion waits silently, then converges and receives a reply once the companion has deleted ctl-gone", async () => {

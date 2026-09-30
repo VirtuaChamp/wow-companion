@@ -6,6 +6,7 @@ import { createClaude } from "../adapters/providers/claude.ts";
 import { createCodexWith } from "../adapters/providers/codex.ts";
 import { createCursorWith, parseListModelsOutput } from "../adapters/providers/cursor.ts";
 import { runProcess } from "../adapters/providers/spawn.ts";
+import { openHandledIds } from "../adapters/handled-ids-store.ts";
 import { isRecord, readJsonFile, writeJsonAtomic } from "../adapters/json-file.ts";
 import { readSettings, writeSettings } from "../adapters/settings-store.ts";
 import { readChatsState, writeChatsState } from "../adapters/state-store.ts";
@@ -15,6 +16,7 @@ import { emptyChatsState } from "../core/chats.ts";
 import type { ChatsState } from "../core/chats.ts";
 import type { Settings } from "../core/settings.ts";
 import { slotAddonName, slotSignalFileName } from "../transport/slots.ts";
+import type { HandledIds } from "../transport/handled-ids.ts";
 import type { SlotPaths } from "../transport/slots.ts";
 import type { Store } from "./context.ts";
 import { createProbes } from "./probe.ts";
@@ -23,7 +25,7 @@ import { settingsFromConfig } from "./settings.ts";
 
 const PROBE_TIMEOUT_MS = 5000;
 
-type StartupFiles = { chats: string; settings: string; game: string };
+type StartupFiles = { chats: string; settings: string; game: string; handledIds: string };
 
 export type Startup = {
   config: Config;
@@ -32,6 +34,7 @@ export type Startup = {
   initialChats: ChatsState;
   initialSettings: Settings;
   initialGame: Partial<Snapshot>;
+  handledIds: HandledIds;
   version: string | undefined;
 };
 
@@ -101,6 +104,7 @@ export async function loadStartup(
     chats: path.join(stateDir, "chats.json"),
     settings: path.join(stateDir, "settings.json"),
     game: path.join(stateDir, "game.json"),
+    handledIds: path.join(stateDir, "handled-ids.json"),
   };
 
   const chatsRead = await readChatsState(files.chats);
@@ -111,6 +115,10 @@ export async function loadStartup(
   if (!settingsRead.ok && settingsRead.error !== "read_missing") {
     return { ok: false, error: `${files.settings} cannot be read: ${settingsRead.error}` };
   }
+  const handledIds = await openHandledIds(files.handledIds);
+  if (!handledIds.ok) {
+    return { ok: false, error: `${files.handledIds} cannot be read: ${handledIds.error}` };
+  }
   return {
     ok: true,
     value: {
@@ -120,6 +128,7 @@ export async function loadStartup(
       initialChats: chatsRead.ok ? chatsRead.value : emptyChatsState,
       initialSettings: settingsRead.ok ? settingsRead.value : settingsFromConfig(config),
       initialGame: await loadGame(files.game, log),
+      handledIds: handledIds.value,
       version: readVersion(path.join(root, "package.json")),
     },
   };

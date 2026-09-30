@@ -5,6 +5,14 @@ local json = dofile("scripts/build-db/json-encode.lua")
 
 io.stdout:setvbuf("no")
 
+_G.print = function(...)
+  local parts = {}
+  for i = 1, select("#", ...) do
+    parts[i] = tostring((select(i, ...)))
+  end
+  io.stderr:write(table.concat(parts, " "), "\n")
+end
+
 local SLOT_COUNT = 200
 local timers = {}
 local chain = {}
@@ -90,6 +98,12 @@ local function loadAddon()
     return true
   end
 
+  local originalHide = ns.Codec.hide
+  ns.Codec.hide = function()
+    lastGrid = nil
+    return originalHide()
+  end
+
   assert(loadfile("addon/WoWCompanion/Inbox.lua"))("WoWCompanion", ns)
   ns.Transport.onMessage(function(msg)
     table.insert(received, msg)
@@ -103,6 +117,7 @@ local tickIndex = { repaint = 1, poll = 2, hello = 3 }
 
 local function tick(name)
   local index = assert(tickIndex[name], "unknown tick " .. tostring(name))
+  _G.WOWC_TEST_GAME_TIME = _G.WOWC_TEST_GAME_TIME + (name == "hello" and 10 or 0.25)
   timers = {}
   chain[index]()
   assert(#timers == 1, "a timer chain re-arms itself exactly once per tick")
@@ -111,7 +126,7 @@ end
 
 local function writeGrid()
   local file = assert(io.open(dir .. "/grid.txt", "w"))
-  for _, cell in ipairs(assert(lastGrid, "nothing painted yet")) do
+  for _, cell in ipairs(lastGrid or {}) do
     file:write(tostring(cell), "\n")
   end
   file:close()
@@ -139,6 +154,9 @@ for line in io.lines() do
   elseif command == "tick" then
     tick(rest)
     io.write("ok\n")
+  elseif command == "width" then
+    _G.WOWC_TEST_PHYSICAL_WIDTH = tonumber(rest)
+    io.write("ok\n")
   elseif command == "grid" then
     writeGrid()
     io.write("ok\n")
@@ -146,6 +164,8 @@ for line in io.lines() do
     local id, text = rest:match("^(%S+)%s+(.*)$")
     local seq, err = ns.Transport.send({ t = "ask", id = id, chat = "general", text = text, mentions = {} })
     io.write(seq and ("ok " .. seq) or ("err " .. tostring(err)), "\n")
+  elseif command == "shown" then
+    io.write(lastGrid and "yes" or "no", "\n")
   elseif command == "info" then
     io.write(json.encode(info()), "\n")
   else

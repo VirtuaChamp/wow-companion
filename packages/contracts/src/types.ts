@@ -84,6 +84,7 @@ export type GameToCompanion =
   | { t: "items"; req: string; items: ItemDetail[] }
   | {
       t: "cmd";
+      id: string;
       chat: string;
       name: "new" | "open" | "rename" | "delete" | "reset" | "cancel";
       arg?: string;
@@ -142,6 +143,8 @@ export type CompanionToGame =
 export interface GameLink {
   messages(): AsyncIterable<GameToCompanion>;
   send(msg: CompanionToGame): Result<void, LinkError>;
+  committed?(msg: GameToCompanion): Promise<boolean>;
+  release?(msg: GameToCompanion): void;
   status(): { connected: boolean; build?: string; slotsLeft: number; badFrames: number };
 }
 
