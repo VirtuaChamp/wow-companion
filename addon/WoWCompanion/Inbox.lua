@@ -532,7 +532,10 @@ local function pollNextSlot()
   if not exhausted then
     if nextSlotIndex > SLOT_COUNT then
       exhausted = true
-      print("WoW Companion: reply slots exhausted, type /reload to continue")
+      print(
+        "WoW Companion: reply slots exhausted, close start.cmd, run install.cmd "
+          .. "(or pnpm run addon:setup), then restart the game"
+      )
     else
       checkSignalsTrusted()
       if signalsTrusted and not signalPresent(slotSignalPath(nextSlotIndex)) then

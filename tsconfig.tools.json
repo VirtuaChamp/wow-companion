@@ -4,5 +4,12 @@
     "outDir": "./dist/tools",
     "rootDir": "."
   },
-  "include": ["scripts/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+  "references": [{ "path": "./packages/contracts" }],
+  "include": [
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "apps/companion/src/config.ts",
+    "apps/companion/src/adapters/json-file.ts"
+  ]
 }

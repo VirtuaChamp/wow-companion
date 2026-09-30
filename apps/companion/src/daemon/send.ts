@@ -66,7 +66,9 @@ export function createSender(link: GameLink, log: (line: string) => void): Sende
         return;
       }
       case "slots_exhausted":
-        log("reply slots exhausted: /reload in the game to continue");
+        log(
+          "reply slots exhausted: close start.cmd, run install.cmd (or pnpm run addon:setup), then restart the game",
+        );
         return;
     }
   }

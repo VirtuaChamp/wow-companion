@@ -514,7 +514,7 @@ local lineInitializer = _G.WOWC_TEST_REGISTERED_INITIALIZERS["WOWC_LINE_POSITION
 assert(lineInitializer ~= nil and lineInitializer.kind == "dropdown", "Signal line position is a dropdown in the settings category")
 assert(lineInitializer.setting.name == "Signal line position", "the dropdown is labelled Signal line position")
 assert(lineInitializer.tooltip ~= nil and lineInitializer.tooltip ~= "", "Signal line position carries a tooltip")
-assert(lineInitializer.tooltip == "The thin line that sends game data to the companion is normally invisible and only blinks while a message is being sent. Move it if another addon or overlay covers it.", "the tooltip is written from the player's view")
+assert(lineInitializer.tooltip == "The thin line that sends game data to the companion is normally invisible. It blinks briefly every few seconds while the companion runs, and when you send a question. Move it if another addon or overlay covers it.", "the tooltip is written from the player's view")
 local lineLabels = {}
 for _, option in ipairs(lineInitializer:GetOptions()) do
   table.insert(lineLabels, option.label)

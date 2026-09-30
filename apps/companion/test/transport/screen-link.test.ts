@@ -2575,7 +2575,9 @@ describe("link.line", () => {
     activeLink = link;
     await link.poll();
     await link.poll();
-    expect(logs).toEqual(["addon and companion versions differ, run setup and restart the game"]);
+    expect(logs).toEqual([
+      "addon and companion versions differ, run pnpm run addon:setup (or install.cmd) and restart the game",
+    ]);
     expect(link.status().badFrames).toBe(2);
     expect(link.status().connected).toBe(false);
   });
@@ -2602,7 +2604,9 @@ describe("link.line", () => {
     activeLink = link;
     await link.poll();
     await link.poll();
-    expect(logs).toEqual(["addon and companion versions differ, run setup and restart the game"]);
+    expect(logs).toEqual([
+      "addon and companion versions differ, run pnpm run addon:setup (or install.cmd) and restart the game",
+    ]);
     expect(link.status().badFrames).toBe(2);
     expect(link.status().connected).toBe(false);
   });

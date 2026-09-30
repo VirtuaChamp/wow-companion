@@ -20,8 +20,9 @@ local STRINGS = {
   textSizeLabel = "Text size",
   textSizeTooltip = "How large the text is in the Claude window: chat bubbles, the chat list and the input line.",
   linePositionLabel = "Signal line position",
-  linePositionTooltip = "The thin line that sends game data to the companion is normally invisible and only "
-    .. "blinks while a message is being sent. Move it if another addon or overlay covers it.",
+  linePositionTooltip = "The thin line that sends game data to the companion is normally invisible. It "
+    .. "blinks briefly every few seconds while the companion runs, and when you send a question. "
+    .. "Move it if another addon or overlay covers it.",
   linePositionTop = "Top edge",
   linePositionBottom = "Bottom edge",
   minimapLabel = "Show minimap button",

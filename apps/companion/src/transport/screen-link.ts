@@ -180,7 +180,9 @@ export function createScreenLink(config: ScreenLinkConfig): ScreenLink {
   function logVersionMismatch(): void {
     if (!versionMismatchLogged) {
       versionMismatchLogged = true;
-      config.log?.("addon and companion versions differ, run setup and restart the game");
+      config.log?.(
+        "addon and companion versions differ, run pnpm run addon:setup (or install.cmd) and restart the game",
+      );
     }
   }
 

@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { downloadVerified } from "./lib/download.ts";
 import { extractTarGz, extractZip } from "./lib/extract.ts";
+import { parseToolSelection } from "./lib/lua-setup-args.ts";
 import { resolveSupportedPlatform, specsByPlatform } from "./lib/lua-toolchain-specs.ts";
 
 const platform = resolveSupportedPlatform();
@@ -110,9 +111,15 @@ const setupLuacheck = async (): Promise<number> => {
 };
 
 const main = async (): Promise<void> => {
+  const selection = parseToolSelection(process.argv.slice(2));
+  if (!selection.ok) {
+    console.error(selection.error);
+    process.exitCode = 1;
+    return;
+  }
   mkdirSync(toolsDir, { recursive: true });
   const luaExit = await setupLua();
-  const luacheckExit = await setupLuacheck();
+  const luacheckExit = selection.value.luacheck ? await setupLuacheck() : 0;
   process.exitCode = luaExit !== 0 ? luaExit : luacheckExit;
 };
 

@@ -18,6 +18,6 @@
       "project": ["src/**/*.ts", "test/**/*.ts"]
     }
   },
-  "ignoreBinaries": ["luacheck", "claude", "codex", "cursor-agent"],
+  "ignoreBinaries": ["where.exe", "luacheck", "claude", "codex", "cursor-agent"],
   "ignoreDependencies": []
 }
