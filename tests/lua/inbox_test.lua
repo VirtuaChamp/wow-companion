@@ -393,11 +393,11 @@ do
   tickPoll()
   local sawExhausted = false
   for i = 1, #printed do
-    if printed[i]:find("reload") then
+    if printed[i] == "WoW Companion: reply slots exhausted, close start.cmd, run install.cmd (or pnpm run addon:setup), then restart the game" then
       sawExhausted = true
     end
   end
-  assert(sawExhausted, "the pool exhausted message asks the user to /reload")
+  assert(sawExhausted, "the pool exhausted message names the working remedy, not /reload")
 end
 
 do

@@ -273,6 +273,9 @@ describe("daemon.ask", () => {
 
     harness.link.push({ t: "ask", id: "a1", chat: "default", text: "hi", mentions: [] });
     await waitFor(() => logs.some((line) => line.includes("slots exhausted")));
+    expect(logs).toContain(
+      "reply slots exhausted: close start.cmd, run install.cmd (or pnpm run addon:setup), then restart the game",
+    );
 
     expect(harness.link.sent().some((msg) => msg.t === "reply")).toBe(false);
     expect(harness.link.sent().some((msg) => msg.t === "error")).toBe(false);

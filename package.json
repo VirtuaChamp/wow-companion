@@ -10,6 +10,8 @@
     "test": "vitest run",
     "start": "node apps/companion/src/main.ts",
     "mcp": "node apps/mcp/src/server.ts",
+    "addon:setup": "node scripts/setup.ts",
+    "build-db": "node scripts/build-db.ts",
     "lua:setup": "node scripts/lua-setup.ts",
     "lua:test": "node scripts/lua-test.ts",
     "lua:lint": "node scripts/lua-lint.ts",
